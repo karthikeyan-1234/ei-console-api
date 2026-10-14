@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/04-EI-Console.Shared/">
+    <Project Path="04-EI-Console.Shared.Application/04-EI-Console.Shared.Application.csproj" />
+    <Project Path="04-EI-Console.Shared.Domain/04-EI-Console.Shared.Domain.csproj" />
+    <Project Path="EI-Console.Shared/04-EI-Console.Shared.Infra.csproj" />
+  </Folder>
+  <Project Path="ei-console-api/00-ei-console-api.csproj" />
+  <Project Path="EI-Console.Application/03-EI-Console.Application.csproj" />
+  <Project Path="EI-Console.Domain/01-EI-Console.Domain.csproj" />
+  <Project Path="EI-Console.Infrastructure/02-EI-Console.Infrastructure.csproj" />
+</Solution>

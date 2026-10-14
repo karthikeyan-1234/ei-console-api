@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<TargetFramework>net10.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<Nullable>enable</Nullable>
+	</PropertyGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Swashbuckle.AspNetCore" Version="7.0.0" />
+		<PackageReference Include="WolverineFx" Version="6.50.0" />
+		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="10.0.0" />
+		<PackageReference Include="WolverineFx.RuntimeCompilation" Version="6.50.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <ProjectReference Include="..\04-EI-Console.Shared.Application\04-EI-Console.Shared.Application.csproj" />
+	  <ProjectReference Include="..\04-EI-Console.Shared.Domain\04-EI-Console.Shared.Domain.csproj" />
+	  <ProjectReference Include="..\EI-Console.Application\03-EI-Console.Application.csproj" />
+	  <ProjectReference Include="..\EI-Console.Domain\01-EI-Console.Domain.csproj" />
+	  <ProjectReference Include="..\EI-Console.Infrastructure\02-EI-Console.Infrastructure.csproj" />
+	  <ProjectReference Include="..\EI-Console.Shared\04-EI-Console.Shared.Infra.csproj" />
+	</ItemGroup>
+
+</Project>

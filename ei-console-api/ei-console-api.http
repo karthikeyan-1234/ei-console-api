@@ -1,0 +1,6 @@
+@ei_console_api_HostAddress = http://localhost:5232
+
+GET {{ei_console_api_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
