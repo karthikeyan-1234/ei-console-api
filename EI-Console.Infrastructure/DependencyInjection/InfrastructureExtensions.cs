@@ -7,8 +7,10 @@ using EI_Console.Application.Pipeline.Executors;
 using EI_Console.Application.Services;
 using EI_Console.Infrastructure.Credentials;
 using EI_Console.Infrastructure.Identity;
+using EI_Console.Infrastructure.Jsonata;
 using EI_Console.Infrastructure.Persistence;
 using EI_Console.Infrastructure.Pipeline;
+using EI_Console.Infrastructure.Pipeline.Executors;
 using EI_Console.Infrastructure.Repositories;
 using EI_Console.Infrastructure.Scheduling;
 using EI_Console.Infrastructure.Tenancy;
@@ -70,6 +72,14 @@ namespace EI_Console.Infrastructure.DependencyInjection
             services.AddScoped<EI_Console.Application.Pipeline.ITaskExecutor, ApiPushExecutor>();
             services.AddScoped<EI_Console.Application.Pipeline.ITaskExecutor, TransformExecutor>();
             services.AddScoped<EI_Console.Application.Pipeline.ITaskExecutor, NotifyExecutor>();
+
+            services.AddScoped<ITaskExecutor, SqlQueryExecutor>();
+            services.AddScoped<ITaskExecutor, FtpDownloadExecutor>();
+            services.AddScoped<ITaskExecutor, SftpDownloadExecutor>();
+
+            services.AddScoped<IFileContentParser, FileContentParser>();
+
+
             services.AddScoped<EI_Console.Application.Pipeline.ITaskExecutorFactory, TaskExecutorFactory>();
             services.AddScoped<EI_Console.Application.Pipeline.IJsonataEvaluator, PassthroughJsonataEvaluator>();
             services.AddScoped<EI_Console.Application.Pipeline.IRealtimePublisher, SignalRRealtimePublisher>();
@@ -94,6 +104,16 @@ namespace EI_Console.Infrastructure.DependencyInjection
             services.AddScoped<IJobScheduler, QuartzJobScheduler>();
 
             services.AddHostedService<SchedulerReconciliationService>();
+
+            services.AddScoped<IStoredCredentialRepository, StoredCredentialRepository>();
+
+
+            services.AddScoped<ISqlConnectionStringResolver, SqlConnectionStringResolver>();
+            services.AddScoped<IFtpCredentialResolver, FtpCredentialResolver>();
+            services.AddScoped<ISftpCredentialResolver, SftpCredentialResolver>();
+
+            services.AddSingleton<IJsonataEvaluator, JsonataEvaluator>();
+            services.AddScoped<IScatterGatherItemRepository, ScatterGatherItemRepository>();
 
             return services;
         }

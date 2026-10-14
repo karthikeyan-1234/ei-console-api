@@ -66,6 +66,13 @@ namespace _04_EI_Console.Shared.Application.Contracts
         int? JoinTimeoutSeconds,
         string? JoinTimeoutAction,
         bool? Iterate,
+            string? RemotePath,
+    string? FileFormat,
+    bool? DeleteAfterDownload,
+        string? Query,
+    int? QueryTimeout,
+        int? BatchSize,
+    int? MaxConcurrency,
         IReadOnlyList<PipelineTaskDto>? Children,
         IReadOnlyList<PipelineTaskDto>? Subtasks);
 
@@ -83,4 +90,5 @@ namespace _04_EI_Console.Shared.Application.Contracts
         string? Description);
 
     public sealed record SavePipelineRequest(IReadOnlyList<PipelineTaskDto> Tasks);
+    public sealed record UpdateJobStatusRequest(string Status);
 }

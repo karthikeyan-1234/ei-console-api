@@ -3,10 +3,12 @@ using EI_Console.Domain.Enums;
 using EI_Console.Domain.Models;
 using EI_Console.Shared.Application;
 
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
 
@@ -21,14 +23,21 @@ namespace EI_Console.Application.Pipeline
         private readonly IRealtimePublisher _realtime;
         private readonly IUnitOfWork _uow;
         private readonly ILogger<PipelineRunner> _log;
+        private readonly IConnectionRepository _connections;
+        private readonly SemaphoreSlim _dbLock = new(1, 1);
+        private readonly IScatterGatherItemRepository _scatter;
+        private readonly IServiceScopeFactory _scopeFactory;
 
         public PipelineRunner(
             IExecutionRepository executions,
             IJobRepository jobs,
             ITaskExecutionLogRepository logs,
+            IConnectionRepository connections,
+            IScatterGatherItemRepository scatter,
             ITaskExecutorFactory executors,
             IRealtimePublisher realtime,
             IUnitOfWork uow,
+            IServiceScopeFactory scopeFactory,
             ILogger<PipelineRunner> log)
         {
             _executions = executions;
@@ -38,6 +47,9 @@ namespace EI_Console.Application.Pipeline
             _realtime = realtime;
             _uow = uow;
             _log = log;
+            _connections = connections;
+            _scatter = scatter;
+            _scopeFactory = scopeFactory;
         }
 
         public async Task RunAsync(Guid executionId, string? payloadJson, CancellationToken ct)
@@ -142,7 +154,16 @@ namespace EI_Console.Application.Pipeline
             int orderIndex,
             CancellationToken ct)
         {
-            var executor = _executors.Resolve(task.TaskType);
+
+            // Resolve connection protocol when the task has a connection.
+            Protocol? protocol = null;
+            if (task.ConnectionId is int connId)
+            {
+                var conn = await _connections.GetByIdAsync(connId, ct);
+                protocol = conn?.Protocol;
+            }
+
+            var executor = ResolveExecutor(task, protocol);
             if (executor is null)
             {
                 await WriteLogAsync(exec, task, orderIndex, TaskExecutionStatus.Failed,
@@ -187,30 +208,97 @@ namespace EI_Console.Application.Pipeline
                     "Success", (int)(completed - started).TotalMilliseconds, ct);
 
                 // Iterator fan-out
+                // Iterator fan-out — bounded concurrency.
                 if (task.TaskType == TaskType.Transform &&
                     task.Iterator is not null &&
                     outcome.Output is { ValueKind: JsonValueKind.Array } arr)
                 {
+                    var cfg = JsonSerializer.Deserialize<IteratorConfigLite>(task.ConfigurationJson ?? "{}");
+
                     var subs = task.ChildTasks
                         .Where(c => c.TaskRole == TaskRole.IteratorSubtask)
                         .OrderBy(c => c.SequenceOrder)
                         .ToList();
 
-                    var index = 0;
-                    foreach (var element in arr.EnumerateArray())
-                    {
-                        var elementContext = new PipelineContext();
-                        elementContext.SetCurrent(element);
+                    var items = arr.EnumerateArray().ToList();
+                    if (items.Count == 0) return true;
 
-                        var subIndex = 0;
-                        foreach (var sub in subs)
+                    // Defaults: process every item, one at a time. Keeps the pre-2A behaviour
+                    // exactly when the fields are absent.
+                    var batchSize = cfg?.BatchSize is int bs and > 0 ? bs : int.MaxValue;
+                    var maxConcurrency = cfg?.MaxConcurrency is int mc and > 0 ? mc : 1;
+
+                    // Thread-safe order index for log entries. Interlocked over a shared box
+                    // because captured locals are compiled to display-class fields; StrongBox
+                    // makes the intent explicit and prevents accidental stack-local aliasing.
+                    var orderBox = new StrongBox<int>(orderIndex + 1);
+
+                    using var gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
+                    var anyItemFailed = false;
+
+                    for (var batchStart = 0; batchStart < items.Count; batchStart += batchSize)
+                    {
+                        ct.ThrowIfCancellationRequested();
+
+                        var batch = items
+                            .Skip(batchStart)
+                            .Take(batchSize)
+                            .ToList();
+
+                        var itemTasks = batch.Select(async (item, localIndex) =>
                         {
-                            var subOk = await RunTaskAsync(exec, sub, elementContext,
-                                orderIndex + 1 + subIndex, ct);
-                            if (!subOk) return false;
-                            subIndex++;
-                        }
-                        index++;
+                            await gate.WaitAsync(ct);
+                            try
+                            {
+                                var globalIndex = batchStart + localIndex;
+                                var inputJson = item.GetRawText();
+                                var itemOk = true;
+
+                                foreach (var sub in subs)
+                                {
+                                    var subOrder = Interlocked.Increment(ref orderBox.Value);
+
+                                    // Fresh scope per (item, subtask). Each scope owns its own
+                                    // DbContext, so parallel items don't trample each other's
+                                    // change tracker.
+                                    await using var scope = _scopeFactory.CreateAsyncScope();
+                                    var innerRunner = scope.ServiceProvider
+                                        .GetRequiredService<PipelineRunner>();
+
+                                    var elementContext = new PipelineContext();
+                                    elementContext.SetCurrent(item);
+
+                                    var subOk = await innerRunner.RunItemSubtaskAsync(
+                                        exec.ExecutionId,
+                                        sub,
+                                        elementContext,
+                                        subOrder,
+                                        inputJson,
+                                        globalIndex,
+                                        task.TaskId,
+                                        ct);
+
+                                    if (!subOk) itemOk = false;
+                                }
+
+                                return itemOk;
+                            }
+                            finally
+                            {
+                                gate.Release();
+                            }
+                        }).ToList();
+
+                        var batchResults = await Task.WhenAll(itemTasks);
+                        if (batchResults.Any(ok => !ok)) anyItemFailed = true;
+                    }
+
+                    if (anyItemFailed)
+                    {
+                        _log.LogWarning(
+                            "Iterator on task {TaskId} had at least one failing item; execution continues",
+                            task.TaskId);
+                        return false;
                     }
                 }
 
@@ -226,10 +314,58 @@ namespace EI_Console.Application.Pipeline
             }
         }
 
+
+        /// <summary>
+        /// Runs one (item, subtask) pair in its own DI scope. Invoked by the
+        /// iterator loop when maxConcurrency > 1 — each parallel item gets its own
+        /// DbContext so EF Core's single-threaded constraint isn't violated.
+        ///
+        /// Writes a scatter_gather_items row before and after the subtask runs.
+        /// </summary>
+        public async Task<bool> RunItemSubtaskAsync(
+            Guid executionId,
+            JobTask sub,
+            PipelineContext context,
+            int orderIndex,
+            string inputJson,
+            int itemIndex,
+            int parentTaskId,
+            CancellationToken ct)
+        {
+            var scatterItem = new ScatterGatherItem
+            {
+                ExecutionId = executionId,
+                TaskId = sub.TaskId,
+                ParentTaskId = parentTaskId,
+                ItemIndex = itemIndex,
+                ItemKey = null,
+                Status = ScatterItemStatus.Dispatched,
+                AttemptCount = 1,
+                InputPayload = inputJson,
+                DispatchedAt = DateTimeOffset.UtcNow,
+            };
+
+            _scatter.Add(scatterItem);
+            await _uow.SaveChangesAsync(ct);
+
+            var exec = await _executions.GetByIdAsync(executionId, ct)
+                ?? throw new InvalidOperationException($"Execution {executionId} not found.");
+
+            var ok = await RunTaskAsync(exec, sub, context, orderIndex, ct);
+
+            scatterItem.Status = ok ? ScatterItemStatus.Completed : ScatterItemStatus.Failed;
+            scatterItem.CompletedAt = DateTimeOffset.UtcNow;
+            scatterItem.OutputPayload = context.Current?.GetRawText();
+            scatterItem.ErrorMessage = ok ? null : $"Subtask '{sub.TaskName}' failed.";
+            await _uow.SaveChangesAsync(ct);
+
+            return ok;
+        }
+
         private async Task WriteLogAsync(
-            JobExecution exec, JobTask task, int orderIndex, TaskExecutionStatus status,
-            string? input, string? output, string? error, int attempt,
-            DateTimeOffset started, DateTimeOffset completed, CancellationToken ct)
+        JobExecution exec, JobTask task, int orderIndex, TaskExecutionStatus status,
+        string? input, string? output, string? error, int attempt,
+        DateTimeOffset started, DateTimeOffset completed, CancellationToken ct)
         {
             var entry = new TaskExecutionLog
             {
@@ -246,8 +382,19 @@ namespace EI_Console.Application.Pipeline
                 CompletedAt = completed,
             };
 
-            _logs.Add(entry);
-            await _uow.SaveChangesAsync(ct);
+            // EF Core's DbContext is not thread-safe. When the iterator runs items
+            // in parallel, two tasks can reach this point simultaneously. Serialize
+            // the Add+Save pair so the change tracker and the DbContext stay coherent.
+            await _dbLock.WaitAsync(ct);
+            try
+            {
+                _logs.Add(entry);
+                await _uow.SaveChangesAsync(ct);
+            }
+            finally
+            {
+                _dbLock.Release();
+            }
         }
 
         private async Task FailExecutionAsync(JobExecution exec, string reason, CancellationToken ct)
@@ -260,5 +407,36 @@ namespace EI_Console.Application.Pipeline
 
         private static string Truncate(string value, int max) =>
             value.Length <= max ? value : value[..max] + "…";
+
+        private ITaskExecutor? ResolveExecutor(JobTask task, Protocol? connectionProtocol)
+        {
+            return _executors.ResolveForConnection(task.TaskType, connectionProtocol);
+        }
+
+        private sealed class IteratorConfigLite
+        {
+            public int? BatchSize { get; set; }
+            public int? MaxConcurrency { get; set; }
+        }
+
+        /// <summary>
+        /// Best-effort extraction of an identifying key from an iterated item.
+        /// Prefers common conventions ("id", "key", "code"), falls back to null.
+        /// Purely informational for the console; nothing downstream depends on it.
+        /// </summary>
+        private static string? ExtractItemKey(JsonElement item)
+        {
+            if (item.ValueKind != JsonValueKind.Object) return null;
+
+            foreach (var name in new[] { "id", "key", "code", "name" })
+            {
+                if (item.TryGetProperty(name, out var v) &&
+                    (v.ValueKind == JsonValueKind.String || v.ValueKind == JsonValueKind.Number))
+                {
+                    return v.ToString();
+                }
+            }
+            return null;
+        }
     }
 }

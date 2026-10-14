@@ -18,7 +18,9 @@ namespace EI_Console.Infrastructure.Repositories
         public ExecutionRepository(EiDbContext db) => _db = db;
 
         public Task<List<JobExecution>> GetRecentAsync(int take, CancellationToken ct = default) =>
-            _db.JobExecutions.AsNoTracking()
+            _db.JobExecutions
+                .AsNoTracking()
+                .Include(e => e.Job)
                 .OrderByDescending(e => e.StartedAt)
                 .Take(take)
                 .ToListAsync(ct);
@@ -31,7 +33,9 @@ namespace EI_Console.Infrastructure.Repositories
                 .ToListAsync(ct);
 
         public Task<JobExecution?> GetByIdAsync(Guid executionId, CancellationToken ct = default) =>
-            _db.JobExecutions.FirstOrDefaultAsync(e => e.ExecutionId == executionId, ct);
+       _db.JobExecutions
+           .Include(e => e.Job)
+           .FirstOrDefaultAsync(e => e.ExecutionId == executionId, ct);
 
         public Task<bool> IdempotencyKeyExistsAsync(string key, DateTimeOffset since, CancellationToken ct = default) =>
             _db.JobExecutions.AnyAsync(

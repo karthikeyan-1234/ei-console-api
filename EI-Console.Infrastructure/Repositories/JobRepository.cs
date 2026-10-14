@@ -37,12 +37,24 @@ namespace EI_Console.Infrastructure.Repositories
                 .Include(j => j.Schedule)
                 .Include(j => j.Versions)
                     .ThenInclude(v => v.Tasks)
+                        .ThenInclude(t => t.ChildTasks)
+                            .ThenInclude(c => c.Iterator)
+                .Include(j => j.Versions)
+                    .ThenInclude(v => v.Tasks)
+                        .ThenInclude(t => t.Iterator)
+                .AsSplitQuery()
                 .FirstOrDefaultAsync(j => j.JobId == id, ct);
 
         public Task<IntegrationJob?> GetBySlugAsync(string slug, CancellationToken ct = default) =>
             _db.IntegrationJobs
                 .Include(j => j.Versions)
                     .ThenInclude(v => v.Tasks)
+                        .ThenInclude(t => t.ChildTasks)
+                            .ThenInclude(c => c.Iterator)
+                .Include(j => j.Versions)
+                    .ThenInclude(v => v.Tasks)
+                        .ThenInclude(t => t.Iterator)
+                .AsSplitQuery()
                 .FirstOrDefaultAsync(j => j.EndpointSlug == slug, ct);
 
         public void Add(IntegrationJob job) => _db.IntegrationJobs.Add(job);

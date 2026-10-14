@@ -1,5 +1,6 @@
 ﻿using _04_EI_Console.Shared.Application.Contracts;
 
+using EI_Console.Application.Interfaces.Infrastructure;
 using EI_Console.Application.Interfaces.Services;
 using EI_Console.Application.Pipeline;
 
@@ -45,6 +46,35 @@ namespace ei_console_api.Controllers
             return Accepted(new TriggerJobResponse(
                 executionId.ToString(),
                 $"/api/ei/executions/{executionId}"));
+        }
+
+        [HttpGet("{executionId:guid}/scatter-items")]
+        public async Task<ActionResult<IReadOnlyList<ScatterGatherItemDto>>> GetScatterItems(
+    Guid executionId,
+    [FromServices] IScatterGatherItemRepository items,
+    CancellationToken ct)
+        {
+            var rows = await items.GetByExecutionAsync(executionId, ct);
+
+            return Ok(rows.Select(r => new ScatterGatherItemDto(
+                r.ItemId,
+                r.ExecutionId,
+                r.TaskId,
+                r.Task?.TaskName ?? $"Task {r.TaskId}",     // new
+                r.ParentTaskId,
+                r.ItemIndex,
+                r.ItemKey,
+                r.Status.ToString(),
+                r.HttpStatusCode,
+                r.AttemptCount,
+                r.InputPayload,
+                r.OutputPayload,
+                r.ErrorMessage,
+                r.DispatchedAt,
+                r.CompletedAt,
+                r.DispatchedAt.HasValue && r.CompletedAt.HasValue
+                    ? (long)(r.CompletedAt.Value - r.DispatchedAt.Value).TotalMilliseconds
+                    : null)).ToList());                      // new
         }
     }
 }

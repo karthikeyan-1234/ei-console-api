@@ -23,16 +23,21 @@ namespace EI_Console.Application.Services
         private readonly IUnitOfWork _uow;
         private readonly ILogger<JobService> _log;
         private readonly IJobScheduler _scheduler;
+        private readonly IExecutionRepository _executions;
+
 
         public JobService(
             IJobRepository jobs,
             ITenantRepository tenants,
+                IExecutionRepository executions,
+
             IJobScheduler scheduler,
             IUnitOfWork uow,
             ILogger<JobService> log)
         {
             _jobs = jobs;
             _tenants = tenants;
+            _executions = executions;
             _scheduler = scheduler;
             _uow = uow;
             _log = log;
@@ -173,6 +178,48 @@ namespace EI_Console.Application.Services
             return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
         }
 
+
+        public async Task<JobDto?> SetStatusAsync(int id, string status, CancellationToken ct = default)
+        {
+            var job = await _jobs.GetWithPipelineAsync(id, ct);
+            if (job is null) return null;
+
+            if (!Enum.TryParse<JobStatus>(status, ignoreCase: true, out var newStatus))
+                throw new InvalidOperationException($"Unknown job status '{status}'.");
+
+            // No-op if the status is already set. Prevents a spurious "Draft → Draft"
+            // log line and avoids an unnecessary DB write.
+            if (job.Status == newStatus) return job.ToDto();
+
+            var previous = job.Status;
+            job.Status = newStatus;
+            job.UpdatedAt = DateTimeOffset.UtcNow;
+
+            await _uow.SaveChangesAsync(ct);
+
+            // Reconcile the Quartz schedule against the new status. Activating a
+            // scheduled job installs its trigger; deactivating removes it.
+            if (newStatus == JobStatus.Active
+                && job.TriggerType == TriggerType.Scheduled
+                && job.Schedule is not null)
+            {
+                await _scheduler.ScheduleAsync(
+                    job.JobId, job.Schedule.CronExpression, job.Schedule.Timezone, ct);
+            }
+            else if (previous == JobStatus.Active
+                  && newStatus != JobStatus.Active)
+            {
+                await _scheduler.UnscheduleAsync(job.JobId, ct);
+            }
+
+            _log.LogInformation(
+                "Job {Id} status changed {Previous} → {New}",
+                id, previous, newStatus);
+
+            return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
+        }
+
+
         // -----------------------------------------------------------------
         // Delete
         // -----------------------------------------------------------------
@@ -182,11 +229,32 @@ namespace EI_Console.Application.Services
             var job = await _jobs.GetByIdAsync(id, ct);
             if (job is null) return false;
 
+            // If the job has any execution history, archive it instead of hard-
+            // deleting. task_execution_log rows reference task_id with RESTRICT, so
+            // a hard delete would either fail or require cascading away the audit
+            // trail. Archiving keeps the history intact and hides the job from the
+            // default list.
+            var executions = await _executions.GetByJobAsync(id, take: 1, ct);
+
+            if (executions.Count > 0)
+            {
+                job.Status = JobStatus.Archived;
+                job.UpdatedAt = DateTimeOffset.UtcNow;
+                await _uow.SaveChangesAsync(ct);
+
+                await _scheduler.UnscheduleAsync(job.JobId, ct);
+
+                _log.LogWarning(
+                    "Job {Name} (id {Id}) archived — has execution history",
+                    job.JobName, job.JobId);
+                return true;
+            }
+
+            // No history — safe to hard delete.
             _jobs.Remove(job);
             await _uow.SaveChangesAsync(ct);
 
             await _scheduler.UnscheduleAsync(job.JobId, ct);
-
 
             _log.LogWarning("Job {Name} (id {Id}) deleted", job.JobName, job.JobId);
             return true;
@@ -201,41 +269,71 @@ namespace EI_Console.Application.Services
             var job = await _jobs.GetWithPipelineAsync(id, ct);
             if (job is null) return null;
 
-            var version = job.Versions
+            var currentVersion = job.Versions
                 .OrderByDescending(v => v.VersionNumber)
                 .FirstOrDefault();
 
-            if (version is null)
+            if (currentVersion is null)
                 throw new InvalidOperationException($"Job {id} has no version.");
 
-            // 1. Load all existing tasks for this version from the database.
-            var existingTasks = await _jobs.GetTasksForVersionAsync(version.VersionId, ct);
+            // If the job has any execution history, we cannot delete the existing
+            // task rows — task_execution_log.task_id references them with RESTRICT.
+            // Create a new version and leave the previous one intact. Executions
+            // remain pinned to the version they ran under.
+            var executions = await _executions.GetByJobAsync(id, take: 1, ct);
+            var hasHistory = executions.Count > 0;
 
-            // 2. Delete children (tasks with a parent) before parents. The FK
-            //    from job_tasks.parent_task_id is ON DELETE RESTRICT, so ordering
-            //    matters. Max depth in v0.1 is two levels, but we sort by depth
-            //    anyway to remain correct if nesting grows.
-            var orderedForDeletion = OrderTasksByDepthDescending(existingTasks);
-            if (orderedForDeletion.Count > 0)
-                _jobs.RemoveTasks(orderedForDeletion);
+            JobVersion version;
 
-            // 3. Clear the in-memory navigation so EF Core doesn't try to
-            //    reconcile the deleted tasks with the incoming ones.
-            version.Tasks.Clear();
+            if (hasHistory)
+            {
+                var now = DateTimeOffset.UtcNow;
 
-            // 4. Persist the deletes. Doing this separately from the inserts
-            //    keeps the transaction small and makes failures easier to reason
-            //    about: if the insert fails, the delete is already committed,
-            //    which is a harmless state (an empty pipeline) rather than a
-            //    half-deleted tree.
-            await _uow.SaveChangesAsync(ct);
+                // UQ_job_versions_published enforces at most one published version per
+                // job. Retire the current one before publishing the new one. The old
+                // version's task rows survive — the executions that ran against them
+                // keep their audit trail. Only the is_published flag flips.
+                currentVersion.IsPublished = false;
 
-            // 5. Re-query the job to get a fresh tracking state with no orphaned
-            //    tasks hanging around in memory.
-            job = await _jobs.GetWithPipelineAsync(id, ct);
-            version = job!.Versions.OrderByDescending(v => v.VersionNumber).First();
+                version = new JobVersion
+                {
+                    VersionNumber = currentVersion.VersionNumber + 1,
+                    PipelineJson = "{\"tasks\":[]}",
+                    PipelineSchemaVersion = 1,
+                    IsPublished = true,
+                    PublishedAt = now,
+                    CreatedAt = now,
+                };
+                job.Versions.Add(version);
 
-            // 6. Build and insert the new tree.
+                // Both changes — flip the old flag, insert the new row — go in one save
+                // so the unique index never sees two published rows simultaneously.
+                await _uow.SaveChangesAsync(ct);
+
+                _log.LogInformation(
+                    "Job {Id} pipeline updated — created version {Version}, retired version {Old}",
+                    id, version.VersionNumber, currentVersion.VersionNumber);
+            }
+            else
+            {
+                // No history — safe to delete-and-replace the current version's tasks.
+                var existingTasks = await _jobs.GetTasksForVersionAsync(currentVersion.VersionId, ct);
+
+                var orderedForDeletion = OrderTasksByDepthDescending(existingTasks);
+                if (orderedForDeletion.Count > 0)
+                    _jobs.RemoveTasks(orderedForDeletion);
+
+                currentVersion.Tasks.Clear();
+                await _uow.SaveChangesAsync(ct);
+
+                // Re-query to get a fresh tracking state with no orphaned tasks.
+                job = await _jobs.GetWithPipelineAsync(id, ct);
+                version = job!.Versions
+                    .OrderByDescending(v => v.VersionNumber)
+                    .First();
+            }
+
+            // Build and insert the new tree under the target version.
             var sequence = 0;
             foreach (var dto in request.Tasks)
             {
@@ -251,8 +349,8 @@ namespace EI_Console.Application.Services
             await _uow.SaveChangesAsync(ct);
 
             _log.LogInformation(
-                "Pipeline saved for job {Id} — {RootCount} root task(s)",
-                id, request.Tasks.Count);
+                "Pipeline saved for job {Id} — {RootCount} root task(s) on version {Version}",
+                id, request.Tasks.Count, version.VersionNumber);
 
             return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
         }
@@ -304,6 +402,24 @@ namespace EI_Console.Application.Services
                 ConfigurationJson = TaskConfigurationSerializer.Serialize(dto),
                 CreatedAt = DateTimeOffset.UtcNow,
             };
+
+            // When the DTO says this Transform iterates, attach the iterator
+            // configuration so the runner's entry condition (task.Iterator is not null)
+            // passes and the per-item loop runs. BatchSize and MaxConcurrency are
+            // also mirrored here for round-trip fidelity and so the console can read
+            // them without parsing configuration_json.
+            if (taskType == TaskType.Transform && dto.Iterate == true)
+            {
+                task.Iterator = new TaskIterator
+                {
+                    TaskType = TaskType.Transform,
+                    // 0 means "no batching, process everything in one batch" and is
+                    // the same default the runner uses when configuration_json lacks
+                    // the field. 1 concurrency means strictly sequential.
+                    BatchSize = dto.BatchSize ?? 0,
+                    MaxConcurrency = dto.MaxConcurrency ?? 1,
+                };
+            }
 
             // Fork children — for a Branch task's children
             if (dto.Children is not null)

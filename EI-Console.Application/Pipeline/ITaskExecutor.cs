@@ -11,10 +11,15 @@ namespace EI_Console.Application.Pipeline
     {
         TaskType Handles { get; }
 
+        /// <summary>
+        /// Optional protocol filter. When non-null, the executor only handles
+        /// tasks whose connection has this protocol. Used to disambiguate
+        /// FtpDownload between its FTP and SFTP implementations.
+        /// </summary>
+        Protocol? RequiredProtocol => null;
+
         Task<TaskExecutionOutcome> ExecuteAsync(
-            JobTask task,
-            PipelineContext context,
-            CancellationToken ct);
+            JobTask task, PipelineContext context, CancellationToken ct);
     }
 
     /// <summary>
@@ -25,6 +30,8 @@ namespace EI_Console.Application.Pipeline
     public interface ITaskExecutorFactory
     {
         ITaskExecutor? Resolve(TaskType type);
+        IReadOnlyList<ITaskExecutor> ResolveAll(TaskType type);
+        ITaskExecutor? ResolveForConnection(TaskType type, Protocol? protocol);
     }
 
 }

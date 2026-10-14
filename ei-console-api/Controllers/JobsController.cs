@@ -42,6 +42,14 @@ namespace ei_console_api.Controllers
             return dto is null ? NotFound() : dto;
         }
 
+        [HttpPut("{id:int}/status")]
+        public async Task<ActionResult<JobDto>> SetStatus(
+            int id, [FromBody] UpdateJobStatusRequest request, CancellationToken ct)
+        {
+            var dto = await _service.SetStatusAsync(id, request.Status, ct);
+            return dto is null ? NotFound() : dto;
+        }
+
         [HttpDelete("{id:int}")]
         public async Task<IActionResult> Delete(int id, CancellationToken ct)
         {

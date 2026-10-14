@@ -28,7 +28,7 @@ public enum TriggerSource { Manual, Scheduled, Webhook, Replay }
 
 public enum TaskRole { Root, ForkBranch, ForkChild, IteratorSubtask }
 
-public enum TaskType { ApiPull, SqlQuery, Transform, ApiPush, Notify, Branch, JoinPoint }
+public enum TaskType { ApiPull, SqlQuery, Transform, ApiPush, Notify, Branch, JoinPoint, FtpDownload }
 
 public enum TaskExecutionStatus { Pending, Running, Success, Failed, Skipped }
 

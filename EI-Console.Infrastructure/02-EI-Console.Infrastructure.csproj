@@ -15,15 +15,20 @@
     <ProjectReference Include="..\EI-Console.Application\03-EI-Console.Application.csproj" />
     <ProjectReference Include="..\EI-Console.Domain\01-EI-Console.Domain.csproj" />
     <ProjectReference Include="..\EI-Console.Shared\04-EI-Console.Shared.Infra.csproj" />
+	  <EmbeddedResource Include="Jsonata\jsonata.min.js" />
   </ItemGroup>
 
 	<ItemGroup>
+		<PackageReference Include="FluentFTP" Version="55.0.0" />
+		<PackageReference Include="Jint" Version="4.17.0" />
 		<PackageReference Include="Microsoft.AspNetCore.Http.Abstractions" Version="2.3.13" />
+		<PackageReference Include="Microsoft.Data.SqlClient" Version="7.1.1" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore" Version="10.0.8" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.Relational" Version="10.0.8" />
 		<PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" Version="10.0.8" />
 		<PackageReference Include="Quartz" Version="4.5.0" />
 		<PackageReference Include="Quartz.Extensions.Hosting" Version="4.5.0" />
+		<PackageReference Include="SSH.NET" Version="2026.0.0" />
 		<PackageReference Include="WolverineFx" Version="6.50.0" />
 		<PackageReference Include="WolverineFx.EntityFrameworkCore" Version="6.50.0" />
 		

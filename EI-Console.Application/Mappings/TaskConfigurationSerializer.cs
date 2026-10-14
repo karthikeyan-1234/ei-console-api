@@ -17,6 +17,7 @@ namespace EI_Console.Application.Mappings
     /// </summary>
     internal static class TaskConfigurationSerializer
     {
+
         private static readonly JsonSerializerOptions Options = new()
         {
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
@@ -42,6 +43,13 @@ namespace EI_Console.Application.Mappings
                 JoinThreshold = dto.JoinThreshold,
                 JoinTimeoutSeconds = dto.JoinTimeoutSeconds,
                 JoinTimeoutAction = dto.JoinTimeoutAction,
+                RemotePath = dto.RemotePath,
+                FileFormat = dto.FileFormat,
+                DeleteAfterDownload = dto.DeleteAfterDownload,
+                Query = dto.Query,
+                QueryTimeout = dto.QueryTimeout,
+                BatchSize = dto.BatchSize,
+                MaxConcurrency = dto.MaxConcurrency,
             };
 
             var json = JsonSerializer.Serialize(payload, Options);
@@ -78,6 +86,18 @@ namespace EI_Console.Application.Mappings
             public int? JoinThreshold { get; set; }
             public int? JoinTimeoutSeconds { get; set; }
             public string? JoinTimeoutAction { get; set; }
+
+            // FtpDownload
+            public string? RemotePath { get; set; }
+            public string? FileFormat { get; set; }        // "Auto" | "Json" | "Csv" | "Text"
+            public bool? DeleteAfterDownload { get; set; }
+
+            public string? Query { get; set; }
+            public int? QueryTimeout { get; set; }
+
+            public int? BatchSize { get; set; }
+            public int? MaxConcurrency { get; set; }
+
         }
     }
 }
