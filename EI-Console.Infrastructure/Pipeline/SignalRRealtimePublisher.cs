@@ -1,22 +1,23 @@
 ﻿using EI_Console.Application.Pipeline;
 
-using Microsoft.AspNetCore.SignalR;
 
-using System;
-using System.Collections.Generic;
-using System.Text;
+using Microsoft.AspNetCore.SignalR;
 
 namespace EI_Console.Infrastructure.Pipeline
 {
     public sealed class SignalRRealtimePublisher : IRealtimePublisher
     {
-        private readonly IHubContext<Hub> _hub;
+        private readonly IHubContext<EiHub> _hub;
 
-        public SignalRRealtimePublisher(IHubContext<Hub> hub) => _hub = hub;
+        public SignalRRealtimePublisher(IHubContext<EiHub> hub) => _hub = hub;
 
         public Task ExecutionStartedAsync(Guid executionId, int tenantId, string jobName, CancellationToken ct) =>
             _hub.Clients.All.SendAsync("executionStarted",
                 new { executionId, tenantId, jobName, at = DateTimeOffset.UtcNow }, ct);
+
+        public Task TaskStartedAsync(Guid executionId, int tenantId, int taskId, string taskName, CancellationToken ct) =>
+            _hub.Clients.All.SendAsync("taskStarted",
+                new { executionId, tenantId, taskId, taskName, at = DateTimeOffset.UtcNow }, ct);
 
         public Task TaskCompletedAsync(Guid executionId, int tenantId, int taskId, string taskName, string status, int durationMs, CancellationToken ct) =>
             _hub.Clients.All.SendAsync("taskCompleted",

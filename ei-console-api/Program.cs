@@ -1,5 +1,6 @@
 using EI_Console.Application.Pipeline;
 using EI_Console.Infrastructure.DependencyInjection;
+using EI_Console.Infrastructure.Pipeline;
 
 using ei_console_api.Hubs;
 using ei_console_api.Registrations;
@@ -12,6 +13,9 @@ using Wolverine;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Single CORS policy. SignalR's negotiate requires credentials, and
+// AllowCredentials cannot be combined with AllowAnyOrigin — explicit
+// origins only.
 builder.Services.AddCors(options =>
 {
     options.AddDefaultPolicy(policy =>
@@ -21,7 +25,8 @@ builder.Services.AddCors(options =>
                 "http://localhost:4200",
                 "https://localhost:4200")
             .AllowAnyHeader()
-            .AllowAnyMethod();
+            .AllowAnyMethod()
+            .AllowCredentials();
     });
 });
 
@@ -75,6 +80,5 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
-app.MapHub<ExecutionHub>("/hubs/ei");
-
+app.MapHub<EiHub>("/hubs/ei");     // single mapping — the only one
 app.Run();

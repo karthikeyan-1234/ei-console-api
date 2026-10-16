@@ -290,6 +290,10 @@ namespace EI_Console.Application.Pipeline
                 ?? throw new InvalidOperationException($"Execution {executionId} not found.");
 
             var started = DateTimeOffset.UtcNow;
+
+            await _realtime.TaskStartedAsync(
+    exec.ExecutionId, (int)exec.JobId, branch.TaskId, branch.TaskName, ct);
+
             var laneOrder = Interlocked.Increment(ref orderBox.Value);
 
             var cfg = JsonSerializer.Deserialize<BranchConfigLite>(branch.ConfigurationJson ?? "{}");
@@ -389,13 +393,14 @@ namespace EI_Console.Application.Pipeline
                 anyFailed ? $"Lane '{branch.TaskName}' had a failing child" : null,
                 1, started, completed, ct);
 
+            // Pair with the TaskStartedAsync published above. Without this, a
+            // skipped lane's id stays in the console's runningTaskIds set and the
+            // card remains highlighted forever.
             await _realtime.TaskCompletedAsync(
                 exec.ExecutionId, (int)exec.JobId, branch.TaskId, branch.TaskName,
-                anyFailed ? "Failed" : "Success",
-                (int)(completed - started).TotalMilliseconds, ct);
+                "Skipped", (int)(completed - started).TotalMilliseconds, ct);
 
-            return new LaneResult(!anyFailed, laneContext.Current,
-                anyFailed ? "Failed" : "Success");
+            return new LaneResult(true, null, "Skipped");
         }
         // -----------------------------------------------------------------
         // JoinPoint — barrier after a fork
@@ -409,6 +414,8 @@ namespace EI_Console.Application.Pipeline
             CancellationToken ct)
         {
             var started = DateTimeOffset.UtcNow;
+            await _realtime.TaskStartedAsync(
+    exec.ExecutionId, (int)exec.JobId, join.TaskId, join.TaskName, ct);
             var snapshot = context.Snapshot();
 
             var cfg = JsonSerializer.Deserialize<JoinConfigLite>(join.ConfigurationJson ?? "{}");
@@ -473,12 +480,10 @@ namespace EI_Console.Application.Pipeline
                 ok ? null : reason,
                 1, started, completed, ct);
 
-            if (ok)
-            {
-                await _realtime.TaskCompletedAsync(
-                    exec.ExecutionId, (int)exec.JobId, join.TaskId, join.TaskName,
-                    "Success", (int)(completed - started).TotalMilliseconds, ct);
-            }
+            await _realtime.TaskCompletedAsync(
+                exec.ExecutionId, (int)exec.JobId, join.TaskId, join.TaskName,
+                ok ? "Success" : "Failed",
+                (int)(completed - started).TotalMilliseconds, ct);
 
             return ok;
         }
@@ -510,6 +515,8 @@ namespace EI_Console.Application.Pipeline
                 return false;
             }
 
+            await _realtime.TaskStartedAsync(exec.ExecutionId, (int)exec.JobId, task.TaskId, task.TaskName, ct);
+
             var started = DateTimeOffset.UtcNow;
             var inputSnapshot = context.Snapshot();
 
@@ -520,9 +527,9 @@ namespace EI_Console.Application.Pipeline
 
                 if (!outcome.Success)
                 {
-                    await WriteLogAsync(exec, task, orderIndex, TaskExecutionStatus.Failed,
-                        inputSnapshot, null, outcome.ErrorMessage,
-                        attempt: 1, started, completed, ct);
+                    await _realtime.TaskCompletedAsync(
+                        exec.ExecutionId, (int)exec.JobId, task.TaskId, task.TaskName,
+                        "Failed", (int)(completed - started).TotalMilliseconds, ct);
                     return false;
                 }
 
@@ -611,9 +618,10 @@ namespace EI_Console.Application.Pipeline
 
                     if (anyItemFailed)
                     {
-                        _log.LogWarning(
-                            "Iterator on task {TaskId} had at least one failing item; execution continues",
-                            task.TaskId);
+                        var doneAt = DateTimeOffset.UtcNow;
+                        await _realtime.TaskCompletedAsync(
+                            exec.ExecutionId, (int)exec.JobId, task.TaskId, task.TaskName,
+                            "Failed", (int)(doneAt - started).TotalMilliseconds, ct);
                         return false;
                     }
                 }
@@ -626,6 +634,10 @@ namespace EI_Console.Application.Pipeline
                 await WriteLogAsync(exec, task, orderIndex, TaskExecutionStatus.Failed,
                     inputSnapshot, null, ex.Message,
                     attempt: 1, started, DateTimeOffset.UtcNow, ct);
+                var crashedAt = DateTimeOffset.UtcNow;
+                await _realtime.TaskCompletedAsync(
+                    exec.ExecutionId, (int)exec.JobId, task.TaskId, task.TaskName,
+                    "Failed", (int)(crashedAt - started).TotalMilliseconds, ct);
                 return false;
             }
         }
