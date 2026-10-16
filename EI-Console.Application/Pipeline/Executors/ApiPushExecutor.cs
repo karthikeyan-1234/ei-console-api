@@ -1,12 +1,13 @@
-﻿using EI_Console.Application.Interfaces.Infrastructure;
+﻿using System.Text.Json;
+
+using _04_EI_Console.Shared.Application.Contracts;
+
+using EI_Console.Application.Interfaces.Infrastructure;
 using EI_Console.Application.Interfaces.Services;
 using EI_Console.Domain.Enums;
 using EI_Console.Domain.Models;
 
-using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Text.Json;
+using Microsoft.Extensions.Logging;
 
 namespace EI_Console.Application.Pipeline.Executors
 {
@@ -14,19 +15,22 @@ namespace EI_Console.Application.Pipeline.Executors
     {
         private readonly IConnectionRepository _connections;
         private readonly ICredentialResolver _credentials;
+        private readonly IApiRequestBodyBuilder _bodyBuilder;
         private readonly IHttpClientFactory _http;
-        private readonly IJsonataEvaluator _jsonata;
+        private readonly ILogger<ApiPushExecutor> _log;
 
         public ApiPushExecutor(
             IConnectionRepository connections,
             ICredentialResolver credentials,
+            IApiRequestBodyBuilder bodyBuilder,
             IHttpClientFactory http,
-            IJsonataEvaluator jsonata)
+            ILogger<ApiPushExecutor> log)
         {
             _connections = connections;
             _credentials = credentials;
+            _bodyBuilder = bodyBuilder;
             _http = http;
-            _jsonata = jsonata;
+            _log = log;
         }
 
         public TaskType Handles => TaskType.ApiPush;
@@ -42,39 +46,34 @@ namespace EI_Console.Application.Pipeline.Executors
                 return TaskExecutionOutcome.Fail($"Connection {connId} not found.");
 
             var cfg = JsonSerializer.Deserialize<TaskConfigLite>(task.ConfigurationJson ?? "{}");
+
             var url = string.IsNullOrWhiteSpace(cfg?.Url)
                 ? conn.BaseUrl
                 : CombineUrl(conn.BaseUrl, cfg!.Url!);
 
-            var method = string.IsNullOrWhiteSpace(cfg?.Method) ? "POST" : cfg!.Method!.ToUpperInvariant();
-
-            // Evaluate the body: if it's a JSONata template, run it. Otherwise use literal.
-            JsonElement? bodyValue = null;
-            if (!string.IsNullOrWhiteSpace(cfg?.Body))
-            {
-                if (cfg.Body!.Contains('$'))
-                {
-                    bodyValue = await _jsonata.EvaluateAsync(cfg.Body, context.Current, ct);
-                }
-                else
-                {
-                    try { bodyValue = JsonDocument.Parse(cfg.Body).RootElement.Clone(); }
-                    catch (JsonException) { bodyValue = JsonSerializer.SerializeToElement(cfg.Body); }
-                }
-            }
-            bodyValue ??= context.Current;
-
-            var bodyJson = bodyValue.HasValue
-                ? JsonSerializer.Serialize(bodyValue.Value)
-                : "{}";
+            var method = string.IsNullOrWhiteSpace(cfg?.Method)
+                ? "POST"
+                : cfg!.Method!.ToUpperInvariant();
 
             var headers = await _credentials.ResolveHeadersAsync(conn.AuthProfile, ct);
+
+            // Build the body via the shared builder. Returns null for None.
+            var content = await _bodyBuilder.BuildAsync(
+                bodyKind: cfg?.BodyKind,
+                bodyJsonata: cfg?.Body,
+                rawContentType: cfg?.RawContentType,
+                formFields: cfg?.FormFields,
+                context: context,
+                ct: ct);
 
             using var client = _http.CreateClient("EiExecutor");
             client.Timeout = TimeSpan.FromSeconds(task.TimeoutSeconds ?? conn.TimeoutSeconds);
 
-            using var req = new HttpRequestMessage(new HttpMethod(method), url);
-            req.Content = new StringContent(bodyJson, Encoding.UTF8, "application/json");
+            using var req = new HttpRequestMessage(new HttpMethod(method), url)
+            {
+                Content = content,
+            };
+
             foreach (var h in headers)
                 req.Headers.TryAddWithoutValidation(h.Key, h.Value);
 
@@ -84,8 +83,14 @@ namespace EI_Console.Application.Pipeline.Executors
                 var responseBody = await resp.Content.ReadAsStringAsync(ct);
 
                 if (!resp.IsSuccessStatusCode)
+                {
+                    _log.LogWarning(
+                        "ApiPush HTTP {Status} for {Method} {Url} — body: {Body}",
+                        (int)resp.StatusCode, method, url, Truncate(responseBody, 500));
+
                     return TaskExecutionOutcome.Fail(
                         $"HTTP {(int)resp.StatusCode} {resp.ReasonPhrase}: {Truncate(responseBody, 300)}");
+                }
 
                 try
                 {
@@ -118,6 +123,9 @@ namespace EI_Console.Application.Pipeline.Executors
             public string? Url { get; set; }
             public string? Method { get; set; }
             public string? Body { get; set; }
+            public string? BodyKind { get; set; }
+            public string? RawContentType { get; set; }
+            public List<FormFieldDto>? FormFields { get; set; }
         }
     }
 }

@@ -9,7 +9,9 @@ public enum AuthType
     OAuth2ClientCredentials,
     SftpKeyCredentials,
     SqlServerConnectionString,
-    WsSecurityUsernameToken
+    WsSecurityUsernameToken,
+
+    SubscriptionTokenExchange
 }
 
 public enum CredentialStorageMode { KeyVault, StoredCredential, Inline }

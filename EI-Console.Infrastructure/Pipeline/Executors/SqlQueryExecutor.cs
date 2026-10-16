@@ -6,9 +6,6 @@ using EI_Console.Domain.Models;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 
-using System;
-using System.Collections.Generic;
-using System.Text;
 using System.Text.Json;
 
 namespace EI_Console.Infrastructure.Pipeline.Executors
@@ -45,7 +42,11 @@ namespace EI_Console.Infrastructure.Pipeline.Executors
             if (string.IsNullOrWhiteSpace(cfg?.Body))
                 return TaskExecutionOutcome.Fail("SqlQuery has no query text.");
 
-            // Build the full connection string from base + credentials.
+            var mode = (cfg.QueryMode ?? "Reader").Trim();
+            if (mode is not ("Reader" or "NonQuery" or "Scalar"))
+                return TaskExecutionOutcome.Fail(
+                    $"Unknown queryMode '{mode}'. Expected Reader, NonQuery, or Scalar.");
+
             var connectionString = await _sqlResolver.ResolveAsync(
                 conn.AuthProfile, conn.BaseUrl, ct);
 
@@ -53,7 +54,7 @@ namespace EI_Console.Infrastructure.Pipeline.Executors
                 return TaskExecutionOutcome.Fail(
                     "Could not resolve SQL Server connection string.");
 
-            var timeout = cfg!.QueryTimeout ?? task.TimeoutSeconds ?? conn.TimeoutSeconds;
+            var timeout = cfg.QueryTimeout ?? task.TimeoutSeconds ?? conn.TimeoutSeconds;
 
             try
             {
@@ -65,31 +66,59 @@ namespace EI_Console.Infrastructure.Pipeline.Executors
                     CommandTimeout = timeout,
                 };
 
-                await using var reader = await cmd.ExecuteReaderAsync(ct);
+                JsonElement output;
 
-                // Build a JSON array of row objects.
-                var rows = new List<Dictionary<string, object?>>();
-
-                while (await reader.ReadAsync(ct))
+                switch (mode)
                 {
-                    var row = new Dictionary<string, object?>(reader.FieldCount);
-                    for (var i = 0; i < reader.FieldCount; i++)
-                    {
-                        var name = reader.GetName(i);
-                        var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
-                        row[name] = value;
-                    }
-                    rows.Add(row);
+                    case "NonQuery":
+                        {
+                            var affected = await cmd.ExecuteNonQueryAsync(ct);
+                            output = JsonSerializer.SerializeToElement(
+                                new { rowsAffected = affected });
+
+                            _log.LogInformation(
+                                "SqlQuery ran NonQuery against connection {ConnId} — {Affected} row(s) affected",
+                                connId, affected);
+                            break;
+                        }
+                    case "Scalar":
+                        {
+                            var value = await cmd.ExecuteScalarAsync(ct);
+                            output = JsonSerializer.SerializeToElement(
+                                new { value = value is DBNull ? null : value });
+
+                            _log.LogInformation(
+                                "SqlQuery ran Scalar against connection {ConnId}",
+                                connId);
+                            break;
+                        }
+                    default: // "Reader"
+                        {
+                            await using var reader = await cmd.ExecuteReaderAsync(ct);
+
+                            var rows = new List<Dictionary<string, object?>>();
+                            while (await reader.ReadAsync(ct))
+                            {
+                                var row = new Dictionary<string, object?>(reader.FieldCount);
+                                for (var i = 0; i < reader.FieldCount; i++)
+                                {
+                                    var name = reader.GetName(i);
+                                    var value = reader.IsDBNull(i) ? null : reader.GetValue(i);
+                                    row[name] = value;
+                                }
+                                rows.Add(row);
+                            }
+
+                            output = JsonSerializer.SerializeToElement(rows);
+
+                            _log.LogInformation(
+                                "SqlQuery returned {Count} row(s) from connection {ConnId}",
+                                rows.Count, connId);
+                            break;
+                        }
                 }
 
-                var json = JsonSerializer.Serialize(rows);
-                var element = JsonDocument.Parse(json).RootElement.Clone();
-
-                _log.LogInformation(
-                    "SqlQuery returned {Count} row(s) from connection {ConnId}",
-                    rows.Count, connId);
-
-                return TaskExecutionOutcome.Ok(element);
+                return TaskExecutionOutcome.Ok(output);
             }
             catch (SqlException ex)
             {
@@ -105,6 +134,7 @@ namespace EI_Console.Infrastructure.Pipeline.Executors
         {
             public string? Body { get; set; }
             public int? QueryTimeout { get; set; }
+            public string? QueryMode { get; set; }
         }
     }
 }

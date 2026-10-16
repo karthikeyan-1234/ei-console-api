@@ -50,6 +50,10 @@ namespace EI_Console.Application.Mappings
                 QueryTimeout = dto.QueryTimeout,
                 BatchSize = dto.BatchSize,
                 MaxConcurrency = dto.MaxConcurrency,
+                QueryMode = dto.QueryMode,
+                BodyKind = dto.BodyKind,
+                RawContentType = dto.RawContentType,
+                FormFields = dto.FormFields?.ToList(),
             };
 
             var json = JsonSerializer.Serialize(payload, Options);
@@ -97,6 +101,12 @@ namespace EI_Console.Application.Mappings
 
             public int? BatchSize { get; set; }
             public int? MaxConcurrency { get; set; }
+
+            public string? QueryMode { get; set; }
+
+            public string? BodyKind { get; set; }
+            public string? RawContentType { get; set; }
+            public List<FormFieldDto>? FormFields { get; set; }
 
         }
     }

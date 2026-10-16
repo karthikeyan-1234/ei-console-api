@@ -28,6 +28,18 @@ namespace EI_Console.Application.Pipeline
             _outputs.TryGetValue(key, out var v) ? v : null;
 
         /// <summary>
+        /// Creates an independent copy of this context. JsonElement values are
+        /// immutable and safe to share; the dictionary itself is copied so
+        /// writes to the clone don't leak into the parent (or sibling lanes).
+        /// </summary>
+        public PipelineContext Clone()
+        {
+            var clone = new PipelineContext { _current = _current };
+            foreach (var (k, v) in _outputs) clone._outputs[k] = v;
+            return clone;
+        }
+
+        /// <summary>
         /// Resolves a path expression against the current value or a stored key.
         /// Accepted forms:
         ///   "$"                → current value
@@ -45,11 +57,9 @@ namespace EI_Console.Application.Pipeline
             if (trimmed.StartsWith("$."))
                 return Navigate(_current, trimmed[2..]);
 
-            // Try stored-key first
             var stored = GetStored(trimmed);
             if (stored.HasValue) return stored;
 
-            // Try stored-key-with-path: split on first dot
             var dot = trimmed.IndexOf('.');
             if (dot > 0)
             {
@@ -59,7 +69,6 @@ namespace EI_Console.Application.Pipeline
                 if (root.HasValue) return Navigate(root, tail);
             }
 
-            // Fall back to navigating the current value
             return Navigate(_current, trimmed);
         }
 

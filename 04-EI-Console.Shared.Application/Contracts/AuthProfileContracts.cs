@@ -30,7 +30,30 @@ namespace _04_EI_Console.Shared.Application.Contracts
        string? SftpPassphraseSecretRef,
        string? SftpInlinePrivateKey,
        string? SftpInlinePassphrase,
-       string? StoredCredentialId);
+       string? StoredCredentialId,
+       // ── SubscriptionTokenExchange ────────────────────────────────────────
+       string? StTokenEndpoint,
+       string? StTokenContentType,
+       string? StGrantType,
+       string? StSubscriptionKeyMode,
+       string? StSubscriptionKeyHeader,
+       string? StSubscriptionKeyQueryParam,
+       string? StUsernameFieldName,
+       string? StPasswordFieldName,
+       string? StSecretKeyFieldName,
+       string? StPasswordSecretRef,
+       string? StInlinePassword,
+       string? StSecretKeySecretRef,
+       string? StInlineSecretKey,
+       string? StSubscriptionKeySecretRef,
+       string? StInlineSubscriptionKey,
+       string? StSuccessRequiresJsonPath,
+       string? StTokenJsonPath,
+       string? StTokenPrefix,
+       string? StTtlSource,
+       string? StExpiresInJsonPath,
+       int? StDefaultTtlSeconds,
+       string? StAdditionalBodyJson);
 
     public sealed record CreateAuthProfileRequest(
         string Name,
@@ -57,7 +80,30 @@ namespace _04_EI_Console.Shared.Application.Contracts
         string? SftpPassphraseSecretRef,
         string? SftpInlinePrivateKey,
         string? SftpInlinePassphrase,
-        string? StoredCredentialId);
+        string? StoredCredentialId,
+        // ── SubscriptionTokenExchange ────────────────────────────────────────
+        string? StTokenEndpoint,
+        string? StTokenContentType,
+        string? StGrantType,
+        string? StSubscriptionKeyMode,
+        string? StSubscriptionKeyHeader,
+        string? StSubscriptionKeyQueryParam,
+        string? StUsernameFieldName,
+        string? StPasswordFieldName,
+        string? StSecretKeyFieldName,
+        string? StPasswordSecretRef,
+        string? StInlinePassword,
+        string? StSecretKeySecretRef,
+        string? StInlineSecretKey,
+        string? StSubscriptionKeySecretRef,
+        string? StInlineSubscriptionKey,
+        string? StSuccessRequiresJsonPath,
+        string? StTokenJsonPath,
+        string? StTokenPrefix,
+        string? StTtlSource,
+        string? StExpiresInJsonPath,
+        int? StDefaultTtlSeconds,
+        string? StAdditionalBodyJson);
 
     public sealed record UpdateAuthProfileRequest(
         string Name,
@@ -83,7 +129,30 @@ namespace _04_EI_Console.Shared.Application.Contracts
         string? SftpPassphraseSecretRef,
         string? SftpInlinePrivateKey,
         string? SftpInlinePassphrase,
-        string? StoredCredentialId);
+        string? StoredCredentialId,
+        // ── SubscriptionTokenExchange ────────────────────────────────────────
+        string? StTokenEndpoint,
+        string? StTokenContentType,
+        string? StGrantType,
+        string? StSubscriptionKeyMode,
+        string? StSubscriptionKeyHeader,
+        string? StSubscriptionKeyQueryParam,
+        string? StUsernameFieldName,
+        string? StPasswordFieldName,
+        string? StSecretKeyFieldName,
+        string? StPasswordSecretRef,
+        string? StInlinePassword,
+        string? StSecretKeySecretRef,
+        string? StInlineSecretKey,
+        string? StSubscriptionKeySecretRef,
+        string? StInlineSubscriptionKey,
+        string? StSuccessRequiresJsonPath,
+        string? StTokenJsonPath,
+        string? StTokenPrefix,
+        string? StTtlSource,
+        string? StExpiresInJsonPath,
+        int? StDefaultTtlSeconds,
+        string? StAdditionalBodyJson);
 
     public sealed record TestAuthResultDto(bool Ok, string Message);
 }

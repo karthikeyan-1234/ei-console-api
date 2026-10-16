@@ -27,6 +27,8 @@ namespace EI_Console.Domain.Models
         public AuthProfileKeycloak? Keycloak { get; set; }
         public AuthProfileMtls? Mtls { get; set; }
         public AuthProfileWsSecurity? WsSecurity { get; set; }
+
+        public AuthProfileSubscriptionToken? SubscriptionToken { get; set; }
         public ICollection<Connection> Connections { get; set; } = new List<Connection>();
         public ICollection<JobTask> JobTasks { get; set; } = new List<JobTask>();
     }

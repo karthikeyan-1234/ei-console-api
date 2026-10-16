@@ -28,6 +28,7 @@ namespace EI_Console.Infrastructure.Repositories
                 .Include(p => p.SqlServer)
                 .Include(p => p.Ftp)
                 .Include(p => p.Sftp)
+                .Include(p => p.SubscriptionToken)
                 .OrderBy(p => p.Name)
                 .ToListAsync(ct);
 
@@ -41,6 +42,7 @@ namespace EI_Console.Infrastructure.Repositories
                 .Include(p => p.SqlServer)
                 .Include(p => p.Ftp)
                 .Include(p => p.Sftp)
+                .Include(p => p.SubscriptionToken)
                 .FirstOrDefaultAsync(p => p.AuthProfileId == id, ct);
 
         public Task<AuthProfile?> GetWithSubtypesAsync(int id, CancellationToken ct = default) =>

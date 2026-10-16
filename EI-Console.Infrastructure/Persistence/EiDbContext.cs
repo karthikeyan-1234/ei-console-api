@@ -53,6 +53,8 @@ public class EiDbContext : DbContext
     public DbSet<ChatMessage> ChatMessages => Set<ChatMessage>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
 
+    public DbSet<AuthProfileSubscriptionToken> AuthProfileSubscriptionToken => Set<AuthProfileSubscriptionToken>();
+
     protected override void ConfigureConventions(ModelConfigurationBuilder b)
     {
         // Enum <-> string conversions (all enum columns are NVARCHAR in the schema)
@@ -234,6 +236,17 @@ public class EiDbContext : DbContext
             e.Property(x => x.AuthType).HasDefaultValue(AuthType.WsSecurityUsernameToken);
             e.HasOne(x => x.AuthProfile).WithOne(p => p.WsSecurity)
                 .HasForeignKey<AuthProfileWsSecurity>(x => new { x.AuthProfileId, x.AuthType })
+                .HasPrincipalKey<AuthProfile>(p => new { p.AuthProfileId, p.AuthType })
+                .OnDelete(DeleteBehavior.Cascade);
+        });
+
+        b.Entity<AuthProfileSubscriptionToken>(e =>
+        {
+            e.ToTable("auth_profile_subscription_token");
+            e.HasKey(x => x.AuthProfileId);
+            e.Property(x => x.AuthType).HasDefaultValue(AuthType.SubscriptionTokenExchange);
+            e.HasOne(x => x.AuthProfile).WithOne(p => p.SubscriptionToken)
+                .HasForeignKey<AuthProfileSubscriptionToken>(x => new { x.AuthProfileId, x.AuthType })
                 .HasPrincipalKey<AuthProfile>(p => new { p.AuthProfileId, p.AuthType })
                 .OnDelete(DeleteBehavior.Cascade);
         });

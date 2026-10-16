@@ -8,8 +8,8 @@ using Microsoft.Extensions.Logging;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text;
 using System.Text.Json;
 
 namespace EI_Console.Application.Pipeline
@@ -27,6 +27,7 @@ namespace EI_Console.Application.Pipeline
         private readonly SemaphoreSlim _dbLock = new(1, 1);
         private readonly IScatterGatherItemRepository _scatter;
         private readonly IServiceScopeFactory _scopeFactory;
+        private readonly IJsonataEvaluator _jsonata;
 
         public PipelineRunner(
             IExecutionRepository executions,
@@ -38,6 +39,7 @@ namespace EI_Console.Application.Pipeline
             IRealtimePublisher realtime,
             IUnitOfWork uow,
             IServiceScopeFactory scopeFactory,
+            IJsonataEvaluator jsonata,
             ILogger<PipelineRunner> log)
         {
             _executions = executions;
@@ -50,7 +52,12 @@ namespace EI_Console.Application.Pipeline
             _connections = connections;
             _scatter = scatter;
             _scopeFactory = scopeFactory;
+            _jsonata = jsonata;
         }
+
+        // -----------------------------------------------------------------
+        // Entry point
+        // -----------------------------------------------------------------
 
         public async Task RunAsync(Guid executionId, string? payloadJson, CancellationToken ct)
         {
@@ -84,7 +91,6 @@ namespace EI_Console.Application.Pipeline
                 .ToList();
 
             var context = new PipelineContext();
-            var orderIndex = 0;
             var succeeded = 0;
             var failed = 0;
             string? terminalError = null;
@@ -102,15 +108,71 @@ namespace EI_Console.Application.Pipeline
                 }
             }
 
-            foreach (var task in rootTasks)
+            // orderBox drives log ordering across the whole execution. Sequential
+            // tasks and fork lanes both draw from it via Interlocked, so log
+            // indices stay unique even when lanes run concurrently.
+            var orderBox = new StrongBox<int>(0);
+            var walkIdx = 0;
+
+            while (walkIdx < rootTasks.Count)
             {
-                var ok = await RunTaskAsync(exec, task, context, orderIndex++, ct);
+                ct.ThrowIfCancellationRequested();
+                var task = rootTasks[walkIdx];
+
+                // ---- Fork: consecutive Branch tasks ----------------------
+                if (task.TaskType == TaskType.Branch)
+                {
+                    var branches = new List<JobTask>();
+                    while (walkIdx < rootTasks.Count &&
+                           rootTasks[walkIdx].TaskType == TaskType.Branch)
+                    {
+                        branches.Add(rootTasks[walkIdx]);
+                        walkIdx++;
+                    }
+
+                    var forkOk = await ExecuteForkAsync(exec, branches, context, orderBox, ct);
+                    if (forkOk) succeeded += branches.Count;
+                    else
+                    {
+                        failed += branches.Count;
+                        terminalError = $"Fork starting at '{branches[0].TaskName}' failed.";
+                        break;
+                    }
+
+                    // Optional JoinPoint immediately after the fork
+                    if (walkIdx < rootTasks.Count &&
+                        rootTasks[walkIdx].TaskType == TaskType.JoinPoint)
+                    {
+                        var join = rootTasks[walkIdx];
+                        walkIdx++;
+                        var joinOrder = orderBox.Value;
+                        orderBox.Value++;
+
+                        var joinOk = await ExecuteJoinAsync(exec, join, context, joinOrder, ct);
+                        if (joinOk) succeeded++;
+                        else
+                        {
+                            failed++;
+                            terminalError = $"Await barrier '{join.TaskName}' failed.";
+                            break;
+                        }
+                    }
+                    continue;
+                }
+
+                // ---- Regular task ---------------------------------------
+                var taskOrder = orderBox.Value;
+                orderBox.Value++;
+
+                var ok = await RunTaskAsync(exec, task, context, taskOrder, ct);
+                walkIdx++;
+
                 if (ok) succeeded++;
                 else
                 {
                     failed++;
                     terminalError = $"Task '{task.TaskName}' failed.";
-                    break; // sequential pipeline stops at first failure
+                    break;
                 }
             }
 
@@ -142,11 +204,289 @@ namespace EI_Console.Application.Pipeline
                 executionId, exec.Status, succeeded, failed);
         }
 
+        // -----------------------------------------------------------------
+        // Fork — run consecutive Branch tasks as parallel lanes
+        // -----------------------------------------------------------------
+
+        private async Task<bool> ExecuteForkAsync(
+            JobExecution exec,
+            IReadOnlyList<JobTask> branches,
+            PipelineContext parentContext,
+            StrongBox<int> orderBox,
+            CancellationToken ct)
+        {
+            if (branches.Count == 0) return true;
+
+            var preForkContext = parentContext.Clone();
+
+            // Every lane runs in its own DI scope so parallel lanes don't
+            // share a DbContext.
+            var laneTasks = branches.Select(async (branch, _) =>
+            {
+                await using var scope = _scopeFactory.CreateAsyncScope();
+                var inner = scope.ServiceProvider.GetRequiredService<PipelineRunner>();
+                return await inner.ExecuteLaneAsync(
+                    exec.ExecutionId, branch, preForkContext, orderBox, ct);
+            }).ToList();
+
+            LaneResult[] results;
+            try
+            {
+                results = await Task.WhenAll(laneTasks);
+            }
+            catch (Exception ex)
+            {
+                _log.LogError(ex,
+                    "Fork execution threw for execution {ExecutionId}", exec.ExecutionId);
+                return false;
+            }
+
+            var aggregate = new Dictionary<string, object?>(branches.Count);
+            var meta = new Dictionary<string, int>
+            {
+                ["success"] = 0,
+                ["skipped"] = 0,
+                ["failed"] = 0,
+                ["total"] = branches.Count,
+            };
+
+            for (var i = 0; i < branches.Count; i++)
+            {
+                var branch = branches[i];
+                var key = string.IsNullOrWhiteSpace(branch.TaskName)
+                    ? $"Branch {i + 1}"
+                    : branch.TaskName;
+
+                var r = results[i];
+                aggregate[key] = r.Output;
+
+                switch (r.Status)
+                {
+                    case "Success": meta["success"]++; break;
+                    case "Skipped": meta["skipped"]++; break;
+                    default: meta["failed"]++; break;
+                }
+            }
+            aggregate["_meta"] = meta;
+
+            parentContext.SetCurrent(JsonSerializer.SerializeToElement(aggregate));
+
+            return results.All(r => r.Success);
+        }
+
         /// <summary>
-        /// Runs one task, logs the attempt, and returns true on success.
-        /// Handles iterator fan-out: if the task is a Transform with iterate=true,
-        /// each child sub-task runs once per array element.
+        /// Runs one branch as a lane: evaluates its condition, then runs its
+        /// children sequentially within a private context. Called by
+        /// ExecuteForkAsync from within a per-lane DI scope.
         /// </summary>
+        public async Task<LaneResult> ExecuteLaneAsync(
+            Guid executionId,
+            JobTask branch,
+            PipelineContext preForkContext,
+            StrongBox<int> orderBox,
+            CancellationToken ct)
+        {
+            var exec = await _executions.GetByIdAsync(executionId, ct)
+                ?? throw new InvalidOperationException($"Execution {executionId} not found.");
+
+            var started = DateTimeOffset.UtcNow;
+            var laneOrder = Interlocked.Increment(ref orderBox.Value);
+
+            var cfg = JsonSerializer.Deserialize<BranchConfigLite>(branch.ConfigurationJson ?? "{}");
+            var condition = cfg?.Condition;
+
+            _log.LogInformation(
+                "Lane '{Branch}' condition='{Condition}'",
+                branch.TaskName, condition ?? "(null)");
+
+            // Three paths:
+            //   empty               → run (default)
+            //   literal "true"      → run
+            //   literal "false"     → skip
+            //   anything else       → JSONata
+            //
+            // The literal shortcut exists because jsonata('false') evaluates to an
+            // empty object rather than the boolean false. JSONata parses the bare
+            // token as a path lookup on the input, not a literal. Bypassing the
+            // engine for the two most common cases avoids the pitfall entirely.
+            bool shouldRun;
+
+            if (string.IsNullOrWhiteSpace(condition))
+            {
+                shouldRun = true;
+            }
+            else if (string.Equals(condition.Trim(), "true", StringComparison.OrdinalIgnoreCase))
+            {
+                shouldRun = true;
+            }
+            else if (string.Equals(condition.Trim(), "false", StringComparison.OrdinalIgnoreCase))
+            {
+                shouldRun = false;
+            }
+            else
+            {
+                try
+                {
+                    var eval = await _jsonata.EvaluateAsync(condition!, preForkContext.Current, ct);
+
+                    _log.LogInformation(
+                        "Lane '{Branch}' — jsonata('{Expr}') returned '{Value}' (kind {Kind})",
+                        branch.TaskName, condition,
+                        eval?.GetRawText() ?? "(null)",
+                        eval?.ValueKind.ToString() ?? "(null)");
+
+                    shouldRun = IsTruthy(eval);
+                }
+                catch (Exception ex)
+                {
+                    await WriteLogAsync(exec, branch, laneOrder, TaskExecutionStatus.Failed,
+                        preForkContext.Snapshot(), null,
+                        $"Condition evaluation failed: {ex.Message}",
+                        1, started, DateTimeOffset.UtcNow, ct);
+                    return new LaneResult(false, null, "Failed");
+                }
+            }
+
+            _log.LogInformation(
+                "Lane '{Branch}' — shouldRun={ShouldRun}",
+                branch.TaskName, shouldRun);
+
+            if (!shouldRun)
+            {
+                await WriteLogAsync(exec, branch, laneOrder, TaskExecutionStatus.Skipped,
+                    preForkContext.Snapshot(), null,
+                    $"Condition '{condition}' was not satisfied",
+                    1, started, DateTimeOffset.UtcNow, ct);
+                return new LaneResult(true, null, "Skipped");
+            }
+
+            // ---- Lane runs: children execute in this lane's private context -----
+            var laneContext = preForkContext.Clone();
+
+            var children = branch.ChildTasks
+                .Where(c => c.TaskRole == TaskRole.ForkChild)
+                .OrderBy(c => c.SequenceOrder)
+                .ToList();
+
+            var anyFailed = false;
+            foreach (var child in children)
+            {
+                var childOrder = Interlocked.Increment(ref orderBox.Value);
+                var ok = await RunTaskAsync(exec, child, laneContext, childOrder, ct);
+                if (!ok)
+                {
+                    anyFailed = true;
+                    break;
+                }
+            }
+
+            var completed = DateTimeOffset.UtcNow;
+
+            await WriteLogAsync(exec, branch, laneOrder,
+                anyFailed ? TaskExecutionStatus.Failed : TaskExecutionStatus.Success,
+                preForkContext.Snapshot(),
+                laneContext.Current?.GetRawText(),
+                anyFailed ? $"Lane '{branch.TaskName}' had a failing child" : null,
+                1, started, completed, ct);
+
+            await _realtime.TaskCompletedAsync(
+                exec.ExecutionId, (int)exec.JobId, branch.TaskId, branch.TaskName,
+                anyFailed ? "Failed" : "Success",
+                (int)(completed - started).TotalMilliseconds, ct);
+
+            return new LaneResult(!anyFailed, laneContext.Current,
+                anyFailed ? "Failed" : "Success");
+        }
+        // -----------------------------------------------------------------
+        // JoinPoint — barrier after a fork
+        // -----------------------------------------------------------------
+
+        private async Task<bool> ExecuteJoinAsync(
+            JobExecution exec,
+            JobTask join,
+            PipelineContext context,
+            int orderIndex,
+            CancellationToken ct)
+        {
+            var started = DateTimeOffset.UtcNow;
+            var snapshot = context.Snapshot();
+
+            var cfg = JsonSerializer.Deserialize<JoinConfigLite>(join.ConfigurationJson ?? "{}");
+            var mode = cfg?.JoinMode ?? "WaitAll";
+            var threshold = cfg?.JoinThreshold ?? 1;
+
+            var current = context.Current;
+            if (!current.HasValue || current.Value.ValueKind != JsonValueKind.Object)
+            {
+                await WriteLogAsync(exec, join, orderIndex, TaskExecutionStatus.Failed,
+                    snapshot, null, "JoinPoint found no upstream fork output",
+                    1, started, DateTimeOffset.UtcNow, ct);
+                return false;
+            }
+
+            // The fork left a _meta block with per-status counts.
+            int success = 0, total = 0, skipped = 0, failedLanes = 0;
+            if (current.Value.TryGetProperty("_meta", out var m) &&
+                m.ValueKind == JsonValueKind.Object)
+            {
+                if (m.TryGetProperty("success", out var s) && s.TryGetInt32(out var sv)) success = sv;
+                if (m.TryGetProperty("skipped", out var sk) && sk.TryGetInt32(out var skv)) skipped = skv;
+                if (m.TryGetProperty("failed", out var f) && f.TryGetInt32(out var fv)) failedLanes = fv;
+                if (m.TryGetProperty("total", out var t) && t.TryGetInt32(out var tv)) total = tv;
+            }
+
+            bool ok;
+            string reason;
+            switch (mode)
+            {
+                case "WaitAny":
+                    ok = success >= 1;
+                    reason = ok
+                        ? $"WaitAny satisfied — {success} lane(s) succeeded"
+                        : "WaitAny not satisfied — no lane succeeded";
+                    break;
+
+                case "WaitN":
+                    ok = success >= threshold;
+                    reason = ok
+                        ? $"WaitN({threshold}) satisfied — {success} lane(s) succeeded"
+                        : $"WaitN({threshold}) not satisfied — {success} of {total} succeeded";
+                    break;
+
+                case "WaitAll":
+                default:
+                    // Skipped lanes are settled by policy — they were never meant to run.
+                    // WaitAll requires every lane that was supposed to run to succeed.
+                    ok = (success + skipped) == total && failedLanes == 0;
+                    reason = ok
+                        ? $"WaitAll satisfied — {success}/{total} succeeded, {skipped} skipped"
+                        : $"WaitAll not satisfied — {success}/{total} succeeded, " +
+                          $"{skipped} skipped, {failedLanes} failed";
+                    break;
+            }
+
+            var completed = DateTimeOffset.UtcNow;
+
+            await WriteLogAsync(exec, join, orderIndex,
+                ok ? TaskExecutionStatus.Success : TaskExecutionStatus.Failed,
+                snapshot, current.Value.GetRawText(),
+                ok ? null : reason,
+                1, started, completed, ct);
+
+            if (ok)
+            {
+                await _realtime.TaskCompletedAsync(
+                    exec.ExecutionId, (int)exec.JobId, join.TaskId, join.TaskName,
+                    "Success", (int)(completed - started).TotalMilliseconds, ct);
+            }
+
+            return ok;
+        }
+
+        // -----------------------------------------------------------------
+        // Existing task runner (unchanged except for the note about order)
+        // -----------------------------------------------------------------
+
         private async Task<bool> RunTaskAsync(
             JobExecution exec,
             JobTask task,
@@ -154,8 +494,6 @@ namespace EI_Console.Application.Pipeline
             int orderIndex,
             CancellationToken ct)
         {
-
-            // Resolve connection protocol when the task has a connection.
             Protocol? protocol = null;
             if (task.ConnectionId is int connId)
             {
@@ -192,11 +530,9 @@ namespace EI_Console.Application.Pipeline
                     ? JsonSerializer.Serialize(outcome.Output.Value)
                     : null;
 
-                // Store output under the task's output key if it has one
                 if (!string.IsNullOrWhiteSpace(task.OutputKey) && outcome.Output.HasValue)
                     context.Store(task.OutputKey!, outcome.Output.Value);
 
-                // Store it as the flowing value
                 context.SetCurrent(outcome.Output);
 
                 await WriteLogAsync(exec, task, orderIndex, TaskExecutionStatus.Success,
@@ -208,7 +544,6 @@ namespace EI_Console.Application.Pipeline
                     "Success", (int)(completed - started).TotalMilliseconds, ct);
 
                 // Iterator fan-out
-                // Iterator fan-out — bounded concurrency.
                 if (task.TaskType == TaskType.Transform &&
                     task.Iterator is not null &&
                     outcome.Output is { ValueKind: JsonValueKind.Array } arr)
@@ -223,16 +558,10 @@ namespace EI_Console.Application.Pipeline
                     var items = arr.EnumerateArray().ToList();
                     if (items.Count == 0) return true;
 
-                    // Defaults: process every item, one at a time. Keeps the pre-2A behaviour
-                    // exactly when the fields are absent.
                     var batchSize = cfg?.BatchSize is int bs and > 0 ? bs : int.MaxValue;
                     var maxConcurrency = cfg?.MaxConcurrency is int mc and > 0 ? mc : 1;
 
-                    // Thread-safe order index for log entries. Interlocked over a shared box
-                    // because captured locals are compiled to display-class fields; StrongBox
-                    // makes the intent explicit and prevents accidental stack-local aliasing.
                     var orderBox = new StrongBox<int>(orderIndex + 1);
-
                     using var gate = new SemaphoreSlim(maxConcurrency, maxConcurrency);
                     var anyItemFailed = false;
 
@@ -240,10 +569,7 @@ namespace EI_Console.Application.Pipeline
                     {
                         ct.ThrowIfCancellationRequested();
 
-                        var batch = items
-                            .Skip(batchStart)
-                            .Take(batchSize)
-                            .ToList();
+                        var batch = items.Skip(batchStart).Take(batchSize).ToList();
 
                         var itemTasks = batch.Select(async (item, localIndex) =>
                         {
@@ -258,9 +584,6 @@ namespace EI_Console.Application.Pipeline
                                 {
                                     var subOrder = Interlocked.Increment(ref orderBox.Value);
 
-                                    // Fresh scope per (item, subtask). Each scope owns its own
-                                    // DbContext, so parallel items don't trample each other's
-                                    // change tracker.
                                     await using var scope = _scopeFactory.CreateAsyncScope();
                                     var innerRunner = scope.ServiceProvider
                                         .GetRequiredService<PipelineRunner>();
@@ -269,18 +592,11 @@ namespace EI_Console.Application.Pipeline
                                     elementContext.SetCurrent(item);
 
                                     var subOk = await innerRunner.RunItemSubtaskAsync(
-                                        exec.ExecutionId,
-                                        sub,
-                                        elementContext,
-                                        subOrder,
-                                        inputJson,
-                                        globalIndex,
-                                        task.TaskId,
-                                        ct);
+                                        exec.ExecutionId, sub, elementContext, subOrder,
+                                        inputJson, globalIndex, task.TaskId, ct);
 
                                     if (!subOk) itemOk = false;
                                 }
-
                                 return itemOk;
                             }
                             finally
@@ -314,14 +630,6 @@ namespace EI_Console.Application.Pipeline
             }
         }
 
-
-        /// <summary>
-        /// Runs one (item, subtask) pair in its own DI scope. Invoked by the
-        /// iterator loop when maxConcurrency > 1 — each parallel item gets its own
-        /// DbContext so EF Core's single-threaded constraint isn't violated.
-        ///
-        /// Writes a scatter_gather_items row before and after the subtask runs.
-        /// </summary>
         public async Task<bool> RunItemSubtaskAsync(
             Guid executionId,
             JobTask sub,
@@ -362,10 +670,31 @@ namespace EI_Console.Application.Pipeline
             return ok;
         }
 
+        // -----------------------------------------------------------------
+        // Helpers
+        // -----------------------------------------------------------------
+
+        private static bool IsTruthy(JsonElement? el)
+        {
+            if (el is null) return false;
+            return el.Value.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Null => false,
+                JsonValueKind.Undefined => false,
+                JsonValueKind.Number => el.Value.GetDouble() != 0,
+                JsonValueKind.String => !string.IsNullOrEmpty(el.Value.GetString()),
+                JsonValueKind.Array => el.Value.GetArrayLength() > 0,
+                JsonValueKind.Object => true,
+                _ => false,
+            };
+        }
+
         private async Task WriteLogAsync(
-        JobExecution exec, JobTask task, int orderIndex, TaskExecutionStatus status,
-        string? input, string? output, string? error, int attempt,
-        DateTimeOffset started, DateTimeOffset completed, CancellationToken ct)
+            JobExecution exec, JobTask task, int orderIndex, TaskExecutionStatus status,
+            string? input, string? output, string? error, int attempt,
+            DateTimeOffset started, DateTimeOffset completed, CancellationToken ct)
         {
             var entry = new TaskExecutionLog
             {
@@ -382,9 +711,6 @@ namespace EI_Console.Application.Pipeline
                 CompletedAt = completed,
             };
 
-            // EF Core's DbContext is not thread-safe. When the iterator runs items
-            // in parallel, two tasks can reach this point simultaneously. Serialize
-            // the Add+Save pair so the change tracker and the DbContext stay coherent.
             await _dbLock.WaitAsync(ct);
             try
             {
@@ -409,9 +735,13 @@ namespace EI_Console.Application.Pipeline
             value.Length <= max ? value : value[..max] + "…";
 
         private ITaskExecutor? ResolveExecutor(JobTask task, Protocol? connectionProtocol)
-        {
-            return _executors.ResolveForConnection(task.TaskType, connectionProtocol);
-        }
+            => _executors.ResolveForConnection(task.TaskType, connectionProtocol);
+
+        // -----------------------------------------------------------------
+        // Config mirror types (deserialized from configuration_json)
+        // -----------------------------------------------------------------
+
+        public sealed record LaneResult(bool Success, JsonElement? Output, string Status);
 
         private sealed class IteratorConfigLite
         {
@@ -419,24 +749,18 @@ namespace EI_Console.Application.Pipeline
             public int? MaxConcurrency { get; set; }
         }
 
-        /// <summary>
-        /// Best-effort extraction of an identifying key from an iterated item.
-        /// Prefers common conventions ("id", "key", "code"), falls back to null.
-        /// Purely informational for the console; nothing downstream depends on it.
-        /// </summary>
-        private static string? ExtractItemKey(JsonElement item)
+        private sealed class BranchConfigLite
         {
-            if (item.ValueKind != JsonValueKind.Object) return null;
+            public string? Condition { get; set; }
+            public string? ExecutionMode { get; set; }
+        }
 
-            foreach (var name in new[] { "id", "key", "code", "name" })
-            {
-                if (item.TryGetProperty(name, out var v) &&
-                    (v.ValueKind == JsonValueKind.String || v.ValueKind == JsonValueKind.Number))
-                {
-                    return v.ToString();
-                }
-            }
-            return null;
+        private sealed class JoinConfigLite
+        {
+            public string? JoinMode { get; set; }
+            public int? JoinThreshold { get; set; }
+            public int? JoinTimeoutSeconds { get; set; }
+            public string? JoinTimeoutAction { get; set; }
         }
     }
 }

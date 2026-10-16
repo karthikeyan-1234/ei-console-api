@@ -28,6 +28,7 @@ using Quartz;
 
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Text;
 
 namespace EI_Console.Infrastructure.DependencyInjection
@@ -44,6 +45,7 @@ namespace EI_Console.Infrastructure.DependencyInjection
 
             // HttpContext-based cross-cutting services
             services.AddHttpContextAccessor();
+            services.AddMemoryCache();
             services.AddScoped<ICurrentUser, CurrentUser>();
             services.AddScoped<ITenantContext, TenantContext>();
             services.AddSingleton<IClock, SystemClock>();
@@ -115,6 +117,22 @@ namespace EI_Console.Infrastructure.DependencyInjection
             services.AddSingleton<IJsonataEvaluator, JsonataEvaluator>();
             services.AddScoped<IScatterGatherItemRepository, ScatterGatherItemRepository>();
 
+
+            services.AddScoped<IApiRequestBodyBuilder, ApiRequestBodyBuilder>();
+
+            services.AddHttpClient("SubscriptionTokenExchange")
+    .ConfigurePrimaryHttpMessageHandler(() =>
+    {
+        var handler = new SocketsHttpHandler();
+        var proxyUrl = config["Proxy:TakafulSocks5"];
+        if (!string.IsNullOrWhiteSpace(proxyUrl))
+        {
+            handler.Proxy = new WebProxy(proxyUrl);
+            handler.UseProxy = true;
+        }
+        return handler;
+    });
+            services.AddSingleton<ISubscriptionTokenResolver, SubscriptionTokenResolver>();
             return services;
         }
     }

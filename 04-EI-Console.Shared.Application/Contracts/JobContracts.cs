@@ -16,7 +16,8 @@ namespace _04_EI_Console.Shared.Application.Contracts
        string LastRun,
        string Next,
        string Description,
-       int Version,
+    int Version,              // working — highest version number
+    int? PublishedVersion,    // latest published, null if never published
        string PublishedAt,
        string PublishedBy,
        int TaskCount,
@@ -36,8 +37,8 @@ namespace _04_EI_Console.Shared.Application.Contracts
         string LastRun,
         string Next,
         string Description,
-        int Version,
-        string PublishedAt,
+    int Version,              // working
+    int? PublishedVersion, string PublishedAt,
         string PublishedBy,
         IReadOnlyList<PipelineTaskDto> Pipeline);
 
@@ -53,6 +54,9 @@ namespace _04_EI_Console.Shared.Application.Contracts
         string? Url,
         string? Method,
         string? Body,
+            string? BodyKind,          // "Json" | "Raw" | "UrlEncoded" | "FormData" | null (=Json)
+    string? RawContentType,    // used when BodyKind = "Raw"
+    IReadOnlyList<FormFieldDto>? FormFields,   // used when BodyKind = "FormData" or "UrlEncoded"
         string? SampleResponse,
         string? InputSource,
         string? Jsonata,
@@ -71,6 +75,7 @@ namespace _04_EI_Console.Shared.Application.Contracts
     bool? DeleteAfterDownload,
         string? Query,
     int? QueryTimeout,
+        string? QueryMode,
         int? BatchSize,
     int? MaxConcurrency,
         IReadOnlyList<PipelineTaskDto>? Children,
@@ -84,10 +89,11 @@ namespace _04_EI_Console.Shared.Application.Contracts
         string? Description);
 
     public sealed record UpdateJobRequest(
-        string Name,
+        string? Name,
         string? Trigger,
         string? Cron,
-        string? Description);
+        string? Description,
+        IReadOnlyList<PipelineTaskDto>? Pipeline);
 
     public sealed record SavePipelineRequest(IReadOnlyList<PipelineTaskDto> Tasks);
     public sealed record UpdateJobStatusRequest(string Status);

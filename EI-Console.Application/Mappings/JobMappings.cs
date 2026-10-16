@@ -27,67 +27,80 @@ namespace EI_Console.Application.Mappings;
 
     public static class JobMappings
     {
-        public static JobSummaryDto ToSummaryDto(this IntegrationJob j)
-        {
-            var version = j.Versions
-                .Where(v => v.IsPublished)
-                .OrderByDescending(v => v.VersionNumber)
-                .FirstOrDefault()
-                ?? j.Versions.OrderByDescending(v => v.VersionNumber).FirstOrDefault();
+    public static JobSummaryDto ToSummaryDto(this IntegrationJob j)
+    {
+        var working = j.Versions
+            .OrderByDescending(v => v.VersionNumber)
+            .FirstOrDefault();
 
-            var tasks = version?.Tasks ?? new List<JobTask>();
+        var published = j.Versions
+            .Where(v => v.IsPublished)
+            .OrderByDescending(v => v.VersionNumber)
+            .FirstOrDefault();
 
-            return new JobSummaryDto(
-                Id: j.JobId.ToString(),
-                Name: j.JobName,
-                Slug: j.EndpointSlug,
-                TenantId: j.TenantId.ToString(),
-                Status: j.Status.ToString(),
-                Trigger: j.TriggerType.ToString(),
-                Cron: j.Schedule?.CronExpression ?? "—",
-                Created: j.CreatedAt.Full(),
-                LastRun: "—",
-                Next: ComputeNext(j),
-                Description: j.Description ?? string.Empty,
-                Version: version?.VersionNumber ?? 0,
-                PublishedAt: version?.PublishedAt?.Full() ?? "—",
-                PublishedBy: version?.PublishedByUser?.DisplayName ?? "—",
-                TaskCount: tasks.Count(t => t.ParentTaskId is null),
-                SubTaskCount: tasks.Count(t => t.TaskRole == Domain.Enums.TaskRole.IteratorSubtask),
-                BranchCount: tasks.Count(t => t.TaskType == Domain.Enums.TaskType.Branch),
-                IteratorCount: tasks.Count(t => t.Iterator != null));
-        }
+        // Task counts come from the working version — that's what the operator
+        // is editing, and it matches what the builder displays.
+        var tasks = working?.Tasks ?? new List<JobTask>();
 
-        public static JobDto ToDto(this IntegrationJob j)
-        {
-            var version = j.Versions
-                .Where(v => v.IsPublished)
-                .OrderByDescending(v => v.VersionNumber)
-                .FirstOrDefault()
-                ?? j.Versions.OrderByDescending(v => v.VersionNumber).FirstOrDefault();
+        return new JobSummaryDto(
+            Id: j.JobId.ToString(),
+            Name: j.JobName,
+            Slug: j.EndpointSlug,
+            TenantId: j.TenantId.ToString(),
+            Status: j.Status.ToString(),
+            Trigger: j.TriggerType.ToString(),
+            Cron: j.Schedule?.CronExpression ?? "—",
+            Created: j.CreatedAt.Full(),
+            LastRun: "—",
+            Next: ComputeNext(j),
+            Description: j.Description ?? string.Empty,
+            Version: working?.VersionNumber ?? 0,
+            PublishedVersion: published?.VersionNumber,
+            PublishedAt: published?.PublishedAt?.Full() ?? "—",
+            PublishedBy: published?.PublishedByUser?.DisplayName ?? "—",
+            TaskCount: tasks.Count(t => t.ParentTaskId is null),
+            SubTaskCount: tasks.Count(t => t.TaskRole == Domain.Enums.TaskRole.IteratorSubtask),
+            BranchCount: tasks.Count(t => t.TaskType == Domain.Enums.TaskType.Branch),
+            IteratorCount: tasks.Count(t => t.Iterator != null));
+    }
 
-            var rootTasks = version?.Tasks
-                .Where(t => t.ParentTaskId is null)
-                .OrderBy(t => t.SequenceOrder)
-                .ToList() ?? new List<JobTask>();
+    public static JobDto ToDto(this IntegrationJob j)
+    {
+        var working = j.Versions
+            .OrderByDescending(v => v.VersionNumber)
+            .FirstOrDefault();
 
-            return new JobDto(
-                Id: j.JobId.ToString(),
-                Name: j.JobName,
-                Slug: j.EndpointSlug,
-                TenantId: j.TenantId.ToString(),
-                Status: j.Status.ToString(),
-                Trigger: j.TriggerType.ToString(),
-                Cron: j.Schedule?.CronExpression ?? "—",
-                Created: j.CreatedAt.Full(),
-                LastRun: "—",
-                Next: ComputeNext(j),
-                Description: j.Description ?? string.Empty,
-                Version: version?.VersionNumber ?? 0,
-                PublishedAt: version?.PublishedAt?.Full() ?? "—",
-                PublishedBy: version?.PublishedByUser?.DisplayName ?? "—",
-                Pipeline: rootTasks.Select(t => t.ToPipelineDto()).ToList());
-        }
+        var published = j.Versions
+            .Where(v => v.IsPublished)
+            .OrderByDescending(v => v.VersionNumber)
+            .FirstOrDefault();
+
+        // Pipeline reflects the working version. If the working version is a
+        // draft on top of a published one, the draft is what the operator is
+        // editing — returning the published version would hide their changes.
+        var rootTasks = working?.Tasks
+            .Where(t => t.ParentTaskId is null)
+            .OrderBy(t => t.SequenceOrder)
+            .ToList() ?? new List<JobTask>();
+
+        return new JobDto(
+            Id: j.JobId.ToString(),
+            Name: j.JobName,
+            Slug: j.EndpointSlug,
+            TenantId: j.TenantId.ToString(),
+            Status: j.Status.ToString(),
+            Trigger: j.TriggerType.ToString(),
+            Cron: j.Schedule?.CronExpression ?? "—",
+            Created: j.CreatedAt.Full(),
+            LastRun: "—",
+            Next: ComputeNext(j),
+            Description: j.Description ?? string.Empty,
+            Version: working?.VersionNumber ?? 0,
+            PublishedVersion: published?.VersionNumber,
+            PublishedAt: published?.PublishedAt?.Full() ?? "—",
+            PublishedBy: published?.PublishedByUser?.DisplayName ?? "—",
+            Pipeline: rootTasks.Select(t => t.ToPipelineDto()).ToList());
+    }
 
     public static PipelineTaskDto ToPipelineDto(this JobTask t)
     {
@@ -136,10 +149,14 @@ namespace EI_Console.Application.Mappings;
         DeleteAfterDownload: cfg?.DeleteAfterDownload,
         Children: children.Count > 0 ? children : null,
         Query: cfg?.Query,
+        QueryMode: cfg?.QueryMode,
         QueryTimeout: cfg?.QueryTimeout,
         Subtasks: subtasks.Count > 0 ? subtasks : null,
         BatchSize: cfg?.BatchSize,
-MaxConcurrency: cfg?.MaxConcurrency);
+MaxConcurrency: cfg?.MaxConcurrency,
+BodyKind: cfg?.BodyKind,
+RawContentType: cfg?.RawContentType,
+FormFields: cfg?.FormFields);
     }
 
     private static string ComputeNext(IntegrationJob j)

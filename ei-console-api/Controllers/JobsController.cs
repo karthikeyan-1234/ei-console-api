@@ -26,6 +26,13 @@ namespace ei_console_api.Controllers
             return dto is null ? NotFound() : dto;
         }
 
+        [HttpPost("{id:int}/publish")]
+        public async Task<ActionResult<JobDto>> Publish(int id, CancellationToken ct)
+        {
+            var dto = await _service.PublishAsync(id, ct);
+            return dto is null ? NotFound() : dto;
+        }
+
         [HttpPost]
         public async Task<ActionResult<JobDto>> Create(
             [FromBody] CreateJobRequest request, CancellationToken ct)

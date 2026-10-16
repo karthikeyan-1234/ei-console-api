@@ -46,7 +46,29 @@ namespace EI_Console.Application.Mappings
                 SftpPassphraseSecretRef: sftp?.PassphraseSecretRef,
                 SftpInlinePrivateKey: sftp?.InlinePrivateKey,
                 SftpInlinePassphrase: sftp?.InlinePassphrase,
-                StoredCredentialId: sql?.StoredCredentialId?.ToString() ?? ftp?.StoredCredentialId?.ToString() ?? sftp?.StoredCredentialId?.ToString());
+                StoredCredentialId: sql?.StoredCredentialId?.ToString() ?? ftp?.StoredCredentialId?.ToString() ?? sftp?.StoredCredentialId?.ToString(),
+                StTokenEndpoint: p.SubscriptionToken?.TokenEndpoint,
+                StTokenContentType: p.SubscriptionToken?.TokenContentType,
+                StGrantType: p.SubscriptionToken?.GrantType,
+                StSubscriptionKeyMode: p.SubscriptionToken?.SubscriptionKeyMode,
+                StSubscriptionKeyHeader: p.SubscriptionToken?.SubscriptionKeyHeader,
+                StSubscriptionKeyQueryParam: p.SubscriptionToken?.SubscriptionKeyQueryParam,
+                StUsernameFieldName: p.SubscriptionToken?.UsernameFieldName,
+                StPasswordFieldName: p.SubscriptionToken?.PasswordFieldName,
+                StSecretKeyFieldName: p.SubscriptionToken?.SecretKeyFieldName,
+                StPasswordSecretRef: p.SubscriptionToken?.PasswordSecretRef,
+                StInlinePassword: p.SubscriptionToken?.InlinePassword,
+                StSecretKeySecretRef: p.SubscriptionToken?.SecretKeySecretRef,
+                StInlineSecretKey: p.SubscriptionToken?.InlineSecretKey,
+                StSubscriptionKeySecretRef: p.SubscriptionToken?.SubscriptionKeySecretRef,
+                StInlineSubscriptionKey: p.SubscriptionToken?.InlineSubscriptionKey,
+                StSuccessRequiresJsonPath: p.SubscriptionToken?.SuccessRequiresJsonPath,
+                StTokenJsonPath: p.SubscriptionToken?.TokenJsonPath,
+                StTokenPrefix: p.SubscriptionToken?.TokenPrefix,
+                StTtlSource: p.SubscriptionToken?.TtlSource,
+                StExpiresInJsonPath: p.SubscriptionToken?.ExpiresInJsonPath,
+                StDefaultTtlSeconds: p.SubscriptionToken?.DefaultTtlSeconds,
+                StAdditionalBodyJson: p.SubscriptionToken?.AdditionalBodyJson);
         }
     }
 }

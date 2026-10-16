@@ -1,4 +1,5 @@
-﻿using EI_Console.Application.Interfaces.Services;
+﻿using EI_Console.Application.Interfaces.Infrastructure;
+using EI_Console.Application.Interfaces.Services;
 using EI_Console.Domain.Enums;
 using EI_Console.Domain.Models;
 
@@ -13,8 +14,8 @@ namespace EI_Console.Infrastructure.Credentials
 {
     /// <summary>
     /// v0.1 resolver. Reads credentials from IConfiguration by the key stored in
-    /// the auth profile's *Ref field. Only ApiKey and WsSecurityUsernameToken
-    /// resolve — everything else returns empty headers and logs a warning.
+    /// the auth profile's *Ref field. Handles ApiKey, WsSecurityUsernameToken,
+    /// and SubscriptionTokenExchange.
     ///
     ///   ApiKey:        ApiKeyRef = "Credentials:auth-3-key" -> value = "{token}"
     ///                  Adds header ApiKeyRef's value to the configured HeaderName.
@@ -23,26 +24,37 @@ namespace EI_Console.Infrastructure.Credentials
     ///
     ///   WsSecurity:    PasswordRef = "Credentials:auth-4-pass" -> value = "{pass}"
     ///                  Adds Authorization: Basic base64(username:password).
+    ///
+    ///   SubscriptionTokenExchange:
+    ///                  Delegates to ISubscriptionTokenResolver, which POSTs
+    ///                  the configured credentials to the vendor's token
+    ///                  endpoint and returns a bearer token (plus an optional
+    ///                  subscription-key header).
     /// </summary>
     public sealed class ConfigCredentialResolver : ICredentialResolver
     {
         private readonly IConfiguration _config;
+        private readonly ISubscriptionTokenResolver _subscriptionTokens;
         private readonly ILogger<ConfigCredentialResolver> _log;
 
-        public ConfigCredentialResolver(IConfiguration config, ILogger<ConfigCredentialResolver> log)
+        public ConfigCredentialResolver(
+            IConfiguration config,
+            ISubscriptionTokenResolver subscriptionTokens,
+            ILogger<ConfigCredentialResolver> log)
         {
             _config = config;
+            _subscriptionTokens = subscriptionTokens;
             _log = log;
         }
 
-        public Task<IReadOnlyDictionary<string, string>> ResolveHeadersAsync(
+        public async Task<IReadOnlyDictionary<string, string>> ResolveHeadersAsync(
             AuthProfile? profile,
             CancellationToken ct = default)
         {
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
             if (profile is null)
-                return Task.FromResult<IReadOnlyDictionary<string, string>>(result);
+                return result;
 
             switch (profile.AuthType)
             {
@@ -52,6 +64,10 @@ namespace EI_Console.Infrastructure.Credentials
 
                 case AuthType.WsSecurityUsernameToken:
                     ResolveBasic(profile, result);
+                    break;
+
+                case AuthType.SubscriptionTokenExchange:
+                    await ResolveSubscriptionTokenAsync(profile, result, ct);
                     break;
 
                 case AuthType.KeycloakAuthCodeExchange:
@@ -68,7 +84,7 @@ namespace EI_Console.Infrastructure.Credentials
                     break;
             }
 
-            return Task.FromResult<IReadOnlyDictionary<string, string>>(result);
+            return result;
         }
 
         private void ResolveApiKey(AuthProfile profile, IDictionary<string, string> headers)
@@ -105,6 +121,29 @@ namespace EI_Console.Infrastructure.Credentials
             var raw = $"{ws.Username}:{password}";
             var b64 = Convert.ToBase64String(Encoding.UTF8.GetBytes(raw));
             headers["Authorization"] = $"Basic {b64}";
+        }
+
+        private async Task ResolveSubscriptionTokenAsync(
+            AuthProfile profile,
+            IDictionary<string, string> headers,
+            CancellationToken ct)
+        {
+            var token = await _subscriptionTokens.ResolveAsync(profile, ct);
+            if (token is null)
+            {
+                _log.LogWarning(
+                    "Subscription token exchange failed for profile {Id}",
+                    profile.AuthProfileId);
+                return;
+            }
+
+            headers["Authorization"] = $"{token.TokenPrefix} {token.AccessToken}";
+
+            if (!string.IsNullOrWhiteSpace(token.SubscriptionHeaderName)
+                && !string.IsNullOrWhiteSpace(token.SubscriptionHeaderValue))
+            {
+                headers[token.SubscriptionHeaderName!] = token.SubscriptionHeaderValue!;
+            }
         }
     }
 }

@@ -89,7 +89,30 @@ namespace EI_Console.Application.Services
                 sftpPassphraseSecretRef: request.SftpPassphraseSecretRef,
                 sftpInlinePrivateKey: request.SftpInlinePrivateKey,
                 sftpInlinePassphrase: request.SftpInlinePassphrase,
-                storedCredentialId: request.StoredCredentialId);
+                storedCredentialId: request.StoredCredentialId,
+                // ── SubscriptionTokenExchange ─────────────────────────────
+                stTokenEndpoint: request.StTokenEndpoint,
+                stTokenContentType: request.StTokenContentType,
+                stGrantType: request.StGrantType,
+                stSubscriptionKeyMode: request.StSubscriptionKeyMode,
+                stSubscriptionKeyHeader: request.StSubscriptionKeyHeader,
+                stSubscriptionKeyQueryParam: request.StSubscriptionKeyQueryParam,
+                stUsernameFieldName: request.StUsernameFieldName,
+                stPasswordFieldName: request.StPasswordFieldName,
+                stSecretKeyFieldName: request.StSecretKeyFieldName,
+                stPasswordSecretRef: request.StPasswordSecretRef,
+                stInlinePassword: request.StInlinePassword,
+                stSecretKeySecretRef: request.StSecretKeySecretRef,
+                stInlineSecretKey: request.StInlineSecretKey,
+                stSubscriptionKeySecretRef: request.StSubscriptionKeySecretRef,
+                stInlineSubscriptionKey: request.StInlineSubscriptionKey,
+                stSuccessRequiresJsonPath: request.StSuccessRequiresJsonPath,
+                stTokenJsonPath: request.StTokenJsonPath,
+                stTokenPrefix: request.StTokenPrefix,
+                stTtlSource: request.StTtlSource,
+                stExpiresInJsonPath: request.StExpiresInJsonPath,
+                stDefaultTtlSeconds: request.StDefaultTtlSeconds,
+                stAdditionalBodyJson: request.StAdditionalBodyJson);
 
             _profiles.Add(profile);
             await _uow.SaveChangesAsync(ct);
@@ -144,7 +167,30 @@ namespace EI_Console.Application.Services
                     sftpPassphraseSecretRef: request.SftpPassphraseSecretRef,
                     sftpInlinePrivateKey: request.SftpInlinePrivateKey,
                     sftpInlinePassphrase: request.SftpInlinePassphrase,
-                    storedCredentialId: request.StoredCredentialId);
+                    storedCredentialId: request.StoredCredentialId,
+                    // ── SubscriptionTokenExchange ─────────────────────────
+                    stTokenEndpoint: request.StTokenEndpoint,
+                    stTokenContentType: request.StTokenContentType,
+                    stGrantType: request.StGrantType,
+                    stSubscriptionKeyMode: request.StSubscriptionKeyMode,
+                    stSubscriptionKeyHeader: request.StSubscriptionKeyHeader,
+                    stSubscriptionKeyQueryParam: request.StSubscriptionKeyQueryParam,
+                    stUsernameFieldName: request.StUsernameFieldName,
+                    stPasswordFieldName: request.StPasswordFieldName,
+                    stSecretKeyFieldName: request.StSecretKeyFieldName,
+                    stPasswordSecretRef: request.StPasswordSecretRef,
+                    stInlinePassword: request.StInlinePassword,
+                    stSecretKeySecretRef: request.StSecretKeySecretRef,
+                    stInlineSecretKey: request.StInlineSecretKey,
+                    stSubscriptionKeySecretRef: request.StSubscriptionKeySecretRef,
+                    stInlineSubscriptionKey: request.StInlineSubscriptionKey,
+                    stSuccessRequiresJsonPath: request.StSuccessRequiresJsonPath,
+                    stTokenJsonPath: request.StTokenJsonPath,
+                    stTokenPrefix: request.StTokenPrefix,
+                    stTtlSource: request.StTtlSource,
+                    stExpiresInJsonPath: request.StExpiresInJsonPath,
+                    stDefaultTtlSeconds: request.StDefaultTtlSeconds,
+                    stAdditionalBodyJson: request.StAdditionalBodyJson);
             }
             else
             {
@@ -169,7 +215,30 @@ namespace EI_Console.Application.Services
                     sftpPassphraseSecretRef: request.SftpPassphraseSecretRef,
                     sftpInlinePrivateKey: request.SftpInlinePrivateKey,
                     sftpInlinePassphrase: request.SftpInlinePassphrase,
-                    storedCredentialId: request.StoredCredentialId);
+                    storedCredentialId: request.StoredCredentialId,
+                    // ── SubscriptionTokenExchange ─────────────────────────
+                    stTokenEndpoint: request.StTokenEndpoint,
+                    stTokenContentType: request.StTokenContentType,
+                    stGrantType: request.StGrantType,
+                    stSubscriptionKeyMode: request.StSubscriptionKeyMode,
+                    stSubscriptionKeyHeader: request.StSubscriptionKeyHeader,
+                    stSubscriptionKeyQueryParam: request.StSubscriptionKeyQueryParam,
+                    stUsernameFieldName: request.StUsernameFieldName,
+                    stPasswordFieldName: request.StPasswordFieldName,
+                    stSecretKeyFieldName: request.StSecretKeyFieldName,
+                    stPasswordSecretRef: request.StPasswordSecretRef,
+                    stInlinePassword: request.StInlinePassword,
+                    stSecretKeySecretRef: request.StSecretKeySecretRef,
+                    stInlineSecretKey: request.StInlineSecretKey,
+                    stSubscriptionKeySecretRef: request.StSubscriptionKeySecretRef,
+                    stInlineSubscriptionKey: request.StInlineSubscriptionKey,
+                    stSuccessRequiresJsonPath: request.StSuccessRequiresJsonPath,
+                    stTokenJsonPath: request.StTokenJsonPath,
+                    stTokenPrefix: request.StTokenPrefix,
+                    stTtlSource: request.StTtlSource,
+                    stExpiresInJsonPath: request.StExpiresInJsonPath,
+                    stDefaultTtlSeconds: request.StDefaultTtlSeconds,
+                    stAdditionalBodyJson: request.StAdditionalBodyJson);
             }
 
             await _uow.SaveChangesAsync(ct);
@@ -214,8 +283,15 @@ namespace EI_Console.Application.Services
                 case AuthType.KeycloakAuthCodeExchange:
                 case AuthType.OAuth2ClientCredentials:
                 case AuthType.MutualTls:
-                    return new TestAuthResultDto(false,
-                        $"{profile.AuthType} is not supported for live testing in v0.1.");
+                case AuthType.SubscriptionTokenExchange:
+                    {
+                        var headers = await _credentials.ResolveHeadersAsync(profile, ct);
+                        return headers.Count == 0
+                            ? new TestAuthResultDto(false,
+                                "Token acquisition failed. Check the API logs for the vendor's response body.")
+                            : new TestAuthResultDto(true,
+                                $"Token acquired. {headers.Count} header(s) will be sent: {string.Join(", ", headers.Keys)}.");
+                    }
 
                 default:
                     return new TestAuthResultDto(false,
@@ -237,6 +313,7 @@ namespace EI_Console.Application.Services
             p.SqlServer = null;
             p.Ftp = null;
             p.Sftp = null;
+            p.SubscriptionToken = null;
         }
 
         private static void AttachSubtype(AuthProfile p, AuthType type,
@@ -247,7 +324,16 @@ namespace EI_Console.Application.Services
             string? username, string? ftpPasswordSecretRef, string? ftpInlinePassword,
             string? sftpPrivateKeySecretRef, string? sftpPassphraseSecretRef,
             string? sftpInlinePrivateKey, string? sftpInlinePassphrase,
-            string? storedCredentialId)
+            string? storedCredentialId,
+            string? stTokenEndpoint, string? stTokenContentType, string? stGrantType,
+            string? stSubscriptionKeyMode, string? stSubscriptionKeyHeader, string? stSubscriptionKeyQueryParam,
+            string? stUsernameFieldName, string? stPasswordFieldName, string? stSecretKeyFieldName,
+            string? stPasswordSecretRef, string? stInlinePassword,
+            string? stSecretKeySecretRef, string? stInlineSecretKey,
+            string? stSubscriptionKeySecretRef, string? stInlineSubscriptionKey,
+            string? stSuccessRequiresJsonPath, string? stTokenJsonPath, string? stTokenPrefix,
+            string? stTtlSource, string? stExpiresInJsonPath, int? stDefaultTtlSeconds,
+            string? stAdditionalBodyJson)
         {
             switch (type)
             {
@@ -344,6 +430,43 @@ namespace EI_Console.Application.Services
                     };
                     break;
 
+                case AuthType.SubscriptionTokenExchange:
+                    p.SubscriptionToken = new AuthProfileSubscriptionToken
+                    {
+                        AuthType = type,
+                        TokenEndpoint = stTokenEndpoint ?? string.Empty,
+                        TokenContentType = stTokenContentType ?? "application/json",
+                        GrantType = stGrantType ?? "password",
+
+                        SubscriptionKeyMode = stSubscriptionKeyMode ?? "Header",
+                        SubscriptionKeyHeader = stSubscriptionKeyHeader,
+                        SubscriptionKeyQueryParam = stSubscriptionKeyQueryParam,
+
+                        UsernameFieldName = stUsernameFieldName ?? "username",
+                        Username = username ?? string.Empty,
+                        PasswordFieldName = stPasswordFieldName ?? "password",
+                        PasswordSecretRef = stPasswordSecretRef,
+                        InlinePassword = stInlinePassword,
+                        SecretKeyFieldName = stSecretKeyFieldName,
+                        SecretKeySecretRef = stSecretKeySecretRef,
+                        InlineSecretKey = stInlineSecretKey,
+                        SubscriptionKeySecretRef = stSubscriptionKeySecretRef,
+                        InlineSubscriptionKey = stInlineSubscriptionKey,
+
+                        CredentialStorageMode = ParseStorageMode(p.CredentialStorageMode.ToString()),
+
+                        SuccessRequiresJsonPath = stSuccessRequiresJsonPath ?? "$.data",
+                        TokenJsonPath = stTokenJsonPath ?? "$.data.accessToken",
+                        TokenPrefix = stTokenPrefix ?? "Bearer",
+
+                        TtlSource = stTtlSource ?? "JwtExp",
+                        ExpiresInJsonPath = stExpiresInJsonPath,
+                        DefaultTtlSeconds = stDefaultTtlSeconds ?? 7200,
+
+                        AdditionalBodyJson = stAdditionalBodyJson,
+                    };
+                    break;
+
                 default:
                     throw new InvalidOperationException($"Unsupported auth type '{type}'.");
             }
@@ -361,7 +484,16 @@ namespace EI_Console.Application.Services
             string? username, string? ftpPasswordSecretRef, string? ftpInlinePassword,
             string? sftpPrivateKeySecretRef, string? sftpPassphraseSecretRef,
             string? sftpInlinePrivateKey, string? sftpInlinePassphrase,
-            string? storedCredentialId)
+            string? storedCredentialId,
+            string? stTokenEndpoint, string? stTokenContentType, string? stGrantType,
+            string? stSubscriptionKeyMode, string? stSubscriptionKeyHeader, string? stSubscriptionKeyQueryParam,
+            string? stUsernameFieldName, string? stPasswordFieldName, string? stSecretKeyFieldName,
+            string? stPasswordSecretRef, string? stInlinePassword,
+            string? stSecretKeySecretRef, string? stInlineSecretKey,
+            string? stSubscriptionKeySecretRef, string? stInlineSubscriptionKey,
+            string? stSuccessRequiresJsonPath, string? stTokenJsonPath, string? stTokenPrefix,
+            string? stTtlSource, string? stExpiresInJsonPath, int? stDefaultTtlSeconds,
+            string? stAdditionalBodyJson)
         {
             switch (type)
             {
@@ -423,6 +555,37 @@ namespace EI_Console.Application.Services
                     p.Sftp.StoredCredentialId = ParseNullableInt(storedCredentialId);
                     break;
 
+                // ── SubscriptionTokenExchange — update the existing row in place ──
+                case AuthType.SubscriptionTokenExchange when p.SubscriptionToken is not null:
+                    if (stTokenEndpoint != null) p.SubscriptionToken.TokenEndpoint = stTokenEndpoint;
+                    if (stTokenContentType != null) p.SubscriptionToken.TokenContentType = stTokenContentType;
+                    if (stGrantType != null) p.SubscriptionToken.GrantType = stGrantType;
+
+                    if (stSubscriptionKeyMode != null) p.SubscriptionToken.SubscriptionKeyMode = stSubscriptionKeyMode;
+                    if (stSubscriptionKeyHeader != null) p.SubscriptionToken.SubscriptionKeyHeader = stSubscriptionKeyHeader;
+                    if (stSubscriptionKeyQueryParam != null) p.SubscriptionToken.SubscriptionKeyQueryParam = stSubscriptionKeyQueryParam;
+                    if (stUsernameFieldName != null) p.SubscriptionToken.UsernameFieldName = stUsernameFieldName;
+                    if (username != null) p.SubscriptionToken.Username = username;
+                    if (stPasswordFieldName != null) p.SubscriptionToken.PasswordFieldName = stPasswordFieldName;
+                    p.SubscriptionToken.PasswordSecretRef = stPasswordSecretRef;
+                    p.SubscriptionToken.InlinePassword = stInlinePassword;
+                    if (stSecretKeyFieldName != null) p.SubscriptionToken.SecretKeyFieldName = stSecretKeyFieldName;
+                    p.SubscriptionToken.SecretKeySecretRef = stSecretKeySecretRef;
+                    p.SubscriptionToken.InlineSecretKey = stInlineSecretKey;
+                    p.SubscriptionToken.SubscriptionKeySecretRef = stSubscriptionKeySecretRef;
+                    p.SubscriptionToken.InlineSubscriptionKey = stInlineSubscriptionKey;
+
+                    if (stSuccessRequiresJsonPath != null) p.SubscriptionToken.SuccessRequiresJsonPath = stSuccessRequiresJsonPath;
+                    if (stTokenJsonPath != null) p.SubscriptionToken.TokenJsonPath = stTokenJsonPath;
+                    if (stTokenPrefix != null) p.SubscriptionToken.TokenPrefix = stTokenPrefix;
+
+                    if (stTtlSource != null) p.SubscriptionToken.TtlSource = stTtlSource;
+                    p.SubscriptionToken.ExpiresInJsonPath = stExpiresInJsonPath;
+                    if (stDefaultTtlSeconds is int ttl) p.SubscriptionToken.DefaultTtlSeconds = ttl;
+
+                    p.SubscriptionToken.AdditionalBodyJson = stAdditionalBodyJson;
+                    break;
+
                 default:
                     // Subtype row is missing or the type is not supported. Attach a fresh one.
                     ClearSubtypes(p);
@@ -433,7 +596,17 @@ namespace EI_Console.Application.Services
                         username, ftpPasswordSecretRef, ftpInlinePassword,
                         sftpPrivateKeySecretRef, sftpPassphraseSecretRef,
                         sftpInlinePrivateKey, sftpInlinePassphrase,
-                        storedCredentialId);
+                        storedCredentialId,
+                        // ── SubscriptionTokenExchange ─────────────────────
+                        stTokenEndpoint, stTokenContentType, stGrantType,
+                        stSubscriptionKeyMode, stSubscriptionKeyHeader, stSubscriptionKeyQueryParam,
+                        stUsernameFieldName, stPasswordFieldName, stSecretKeyFieldName,
+                        stPasswordSecretRef, stInlinePassword,
+                        stSecretKeySecretRef, stInlineSecretKey,
+                        stSubscriptionKeySecretRef, stInlineSubscriptionKey,
+                        stSuccessRequiresJsonPath, stTokenJsonPath, stTokenPrefix,
+                        stTtlSource, stExpiresInJsonPath, stDefaultTtlSeconds,
+                        stAdditionalBodyJson);
                     break;
             }
         }
@@ -455,5 +628,4 @@ namespace EI_Console.Application.Services
                 ? m
                 : CredentialStorageMode.KeyVault;
     }
-
 }

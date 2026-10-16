@@ -67,6 +67,13 @@ namespace EI_Console.Infrastructure.Repositories
         .OrderBy(t => t.TaskId)
         .ToListAsync(ct);
 
+        public Task<bool> VersionHasExecutionHistoryAsync(
+    int versionId, CancellationToken ct = default) =>
+    (from l in _db.TaskExecutionLogs
+     join t in _db.JobTasks on l.TaskId equals t.TaskId
+     where t.VersionId == versionId
+     select 1).AnyAsync(ct);
+
         public void RemoveTasks(IEnumerable<JobTask> tasks) =>
             _db.JobTasks.RemoveRange(tasks);
 

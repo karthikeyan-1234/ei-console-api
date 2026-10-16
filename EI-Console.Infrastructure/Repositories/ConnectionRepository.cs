@@ -28,6 +28,7 @@ namespace EI_Console.Infrastructure.Repositories
         public Task<Connection?> GetWithAuthProfileAsync(int id, CancellationToken ct = default) =>
             _db.Connections
                 .Include(c => c.AuthProfile)
+            .ThenInclude(p => p.SubscriptionToken)
                 .FirstOrDefaultAsync(c => c.ConnectionId == id, ct);
 
         public void Add(Connection connection) => _db.Connections.Add(connection);

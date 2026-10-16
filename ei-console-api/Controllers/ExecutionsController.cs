@@ -76,5 +76,19 @@ namespace ei_console_api.Controllers
                     ? (long)(r.CompletedAt.Value - r.DispatchedAt.Value).TotalMilliseconds
                     : null)).ToList());                      // new
         }
+
+        [HttpGet("{executionId:guid}/task-log")]
+        public async Task<ActionResult<IReadOnlyList<TaskLogEntryDto>>> GetTaskLog(
+    Guid executionId,
+    CancellationToken ct)
+        {
+            // ExecutionService.GetAsync already assembles the task log with names
+            // and types resolved. This endpoint just exposes it at the URL the
+            // console calls, so the detail view can fetch the log independently.
+            var detail = await _service.GetAsync(executionId, ct);
+            return detail is null ? NotFound() : Ok(detail.TaskLogs);
+        }
+
+
     }
 }

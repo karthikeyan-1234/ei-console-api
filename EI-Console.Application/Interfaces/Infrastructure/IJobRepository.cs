@@ -18,5 +18,6 @@ namespace EI_Console.Application.Interfaces.Infrastructure
 
         Task<List<JobTask>> GetTasksForVersionAsync(int versionId, CancellationToken ct = default);
         void RemoveTasks(IEnumerable<JobTask> tasks);
+        Task<bool> VersionHasExecutionHistoryAsync(int versionId, CancellationToken ct = default);
     }
 }

@@ -59,6 +59,65 @@ namespace EI_Console.Application.Services
             return job?.ToDto();
         }
 
+        public async Task<JobDto?> PublishAsync(int id, CancellationToken ct = default)
+        {
+            var job = await _jobs.GetWithPipelineAsync(id, ct);
+            if (job is null) return null;
+
+            var current = job.Versions
+                .OrderByDescending(v => v.VersionNumber)
+                .FirstOrDefault();
+            if (current is null)
+                throw new InvalidOperationException($"Job {id} has no version.");
+
+            if (current.IsPublished)
+            {
+                // Idempotent. Re-publishing an already-published job just ensures
+                // the job is Active and returns.
+                if (job.Status != JobStatus.Active)
+                {
+                    job.Status = JobStatus.Active;
+                    job.UpdatedAt = DateTimeOffset.UtcNow;
+                    await _uow.SaveChangesAsync(ct);
+                }
+                return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
+            }
+
+            var tasks = await _jobs.GetTasksForVersionAsync(current.VersionId, ct);
+            if (tasks.Count == 0)
+                throw new InvalidOperationException(
+                    "Cannot publish — the current version has no tasks. " +
+                    "Add at least one task in the builder first.");
+
+            // Retire any other published version — the unique index
+            // UQ_job_versions_published permits exactly one per job.
+            foreach (var v in job.Versions.Where(v => v.IsPublished))
+                v.IsPublished = false;
+
+            current.IsPublished = true;
+            current.PublishedAt = DateTimeOffset.UtcNow;
+
+            job.Status = JobStatus.Active;
+            job.UpdatedAt = DateTimeOffset.UtcNow;
+
+            await _uow.SaveChangesAsync(ct);
+
+            await _scheduler.UnscheduleAsync(id, ct);
+            if (job.TriggerType == TriggerType.Scheduled && job.Schedule is not null)
+            {
+                await _scheduler.ScheduleAsync(
+                    id, job.Schedule.CronExpression, job.Schedule.Timezone, ct);
+            }
+
+            _log.LogInformation(
+                "Job {Id} published v{Version} and set to Active",
+                id, current.VersionNumber);
+
+            return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
+        }
+        
+        
+        
         // -----------------------------------------------------------------
         // Create
         // -----------------------------------------------------------------
@@ -142,8 +201,12 @@ namespace EI_Console.Application.Services
             var job = await _jobs.GetWithPipelineAsync(id, ct);
             if (job is null) return null;
 
-            job.JobName = request.Name.Trim();
-            job.Description = request.Description;
+            if (!string.IsNullOrWhiteSpace(request.Name))
+                job.JobName = request.Name.Trim();
+
+            if (request.Description != null)
+                job.Description = request.Description;
+
             job.UpdatedAt = DateTimeOffset.UtcNow;
 
             if (!string.IsNullOrWhiteSpace(request.Trigger))
@@ -156,7 +219,11 @@ namespace EI_Console.Application.Services
                     if (!string.IsNullOrWhiteSpace(request.Cron))
                     {
                         if (job.Schedule is null)
-                            job.Schedule = new JobSchedule { CronExpression = request.Cron.Trim(), Timezone = "UTC" };
+                            job.Schedule = new JobSchedule
+                            {
+                                CronExpression = request.Cron.Trim(),
+                                Timezone = "UTC",
+                            };
                         else
                             job.Schedule.CronExpression = request.Cron.Trim();
                     }
@@ -172,12 +239,21 @@ namespace EI_Console.Application.Services
             await _scheduler.UnscheduleAsync(id, ct);
             if (job.TriggerType == TriggerType.Scheduled && job.Schedule is not null)
             {
-                await _scheduler.ScheduleAsync(id, job.Schedule.CronExpression, job.Schedule.Timezone, ct);
+                await _scheduler.ScheduleAsync(
+                    id, job.Schedule.CronExpression, job.Schedule.Timezone, ct);
+            }
+
+            // If the caller supplied a pipeline, replace it through the same path
+            // the dedicated /pipeline endpoint uses. This is how the builder
+            // persists task-list edits — it does not know about the separate
+            // pipeline endpoint.
+            if (request.Pipeline is not null)
+            {
+                await SavePipelineAsync(id, new SavePipelineRequest(request.Pipeline), ct);
             }
 
             return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
         }
-
 
         public async Task<JobDto?> SetStatusAsync(int id, string status, CancellationToken ct = default)
         {
@@ -269,92 +345,82 @@ namespace EI_Console.Application.Services
             var job = await _jobs.GetWithPipelineAsync(id, ct);
             if (job is null) return null;
 
-            var currentVersion = job.Versions
+            var current = job.Versions
                 .OrderByDescending(v => v.VersionNumber)
                 .FirstOrDefault();
-
-            if (currentVersion is null)
+            if (current is null)
                 throw new InvalidOperationException($"Job {id} has no version.");
 
-            // If the job has any execution history, we cannot delete the existing
-            // task rows — task_execution_log.task_id references them with RESTRICT.
-            // Create a new version and leave the previous one intact. Executions
-            // remain pinned to the version they ran under.
-            var executions = await _executions.GetByJobAsync(id, take: 1, ct);
-            var hasHistory = executions.Count > 0;
+            // A published version is frozen. Executions are pinned to it; its task
+            // rows may be referenced by task_execution_log (FK RESTRICT). Editing
+            // in place would break both. Fork a new draft on top.
+            //
+            // A draft version is editable in place — that is what keeps version
+            // numbers stable across many edits. This is the fix: the signal is
+            // "is the current version published?", not "does the job have any
+            // execution history?".
+            // Fork a new version whenever the current one cannot be edited in place:
+            //   - it is published (executions pinned to it)
+            //   - its tasks have execution-log rows (FK RESTRICT blocks delete)
+            // A pure draft that has never been executed can be edited in place.
+            var hasHistory = await _jobs.VersionHasExecutionHistoryAsync(current.VersionId, ct);
 
-            JobVersion version;
-
-            if (hasHistory)
+            if (current.IsPublished || hasHistory)
             {
+                var reason = current.IsPublished
+                    ? $"published v{current.VersionNumber} was frozen"
+                    : $"v{current.VersionNumber} has execution history";
+
                 var now = DateTimeOffset.UtcNow;
-
-                // UQ_job_versions_published enforces at most one published version per
-                // job. Retire the current one before publishing the new one. The old
-                // version's task rows survive — the executions that ran against them
-                // keep their audit trail. Only the is_published flag flips.
-                currentVersion.IsPublished = false;
-
-                version = new JobVersion
+                var draft = new JobVersion
                 {
-                    VersionNumber = currentVersion.VersionNumber + 1,
+                    VersionNumber = current.VersionNumber + 1,
                     PipelineJson = "{\"tasks\":[]}",
-                    PipelineSchemaVersion = 1,
-                    IsPublished = true,
-                    PublishedAt = now,
+                    PipelineSchemaVersion = current.PipelineSchemaVersion,
+                    IsPublished = false,
                     CreatedAt = now,
                 };
-                job.Versions.Add(version);
+                job.Versions.Add(draft);
 
-                // Both changes — flip the old flag, insert the new row — go in one save
-                // so the unique index never sees two published rows simultaneously.
                 await _uow.SaveChangesAsync(ct);
 
                 _log.LogInformation(
-                    "Job {Id} pipeline updated — created version {Version}, retired version {Old}",
-                    id, version.VersionNumber, currentVersion.VersionNumber);
+                    "Job {Id} — created draft v{Version} on top ({Reason})",
+                    id, draft.VersionNumber, reason);
+
+                current = draft;
             }
-            else
+
+            // `current` is now a mutable draft. Replace its task tree atomically.
+            // Delete-then-insert in a single SaveChanges — EF Core will batch the
+            // whole operation into one MERGE and one transaction. If the insert
+            // fails, the delete rolls back with it. No orphan-empty-draft possible.
+            var existing = await _jobs.GetTasksForVersionAsync(current.VersionId, ct);
+            if (existing.Count > 0)
             {
-                // No history — safe to delete-and-replace the current version's tasks.
-                var existingTasks = await _jobs.GetTasksForVersionAsync(currentVersion.VersionId, ct);
-
-                var orderedForDeletion = OrderTasksByDepthDescending(existingTasks);
-                if (orderedForDeletion.Count > 0)
-                    _jobs.RemoveTasks(orderedForDeletion);
-
-                currentVersion.Tasks.Clear();
-                await _uow.SaveChangesAsync(ct);
-
-                // Re-query to get a fresh tracking state with no orphaned tasks.
-                job = await _jobs.GetWithPipelineAsync(id, ct);
-                version = job!.Versions
-                    .OrderByDescending(v => v.VersionNumber)
-                    .First();
+                _jobs.RemoveTasks(OrderTasksByDepthDescending(existing));
+                current.Tasks.Clear();
             }
 
-            // Build and insert the new tree under the target version.
             var sequence = 0;
             foreach (var dto in request.Tasks)
             {
-                var task = BuildTaskTree(
-                    versionId: version.VersionId,
+                current.Tasks.Add(BuildTaskTree(
+                    versionId: current.VersionId,
                     parentTaskId: null,
                     role: TaskRole.Root,
                     sequenceOrder: sequence++,
-                    dto: dto);
-                version.Tasks.Add(task);
+                    dto: dto));
             }
 
             await _uow.SaveChangesAsync(ct);
 
             _log.LogInformation(
-                "Pipeline saved for job {Id} — {RootCount} root task(s) on version {Version}",
-                id, request.Tasks.Count, version.VersionNumber);
+                "Pipeline saved for job {Id} — {RootCount} root task(s) on v{Version}",
+                id, request.Tasks.Count, current.VersionNumber);
 
             return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
         }
-
         // -----------------------------------------------------------------
         // Helpers
         // -----------------------------------------------------------------

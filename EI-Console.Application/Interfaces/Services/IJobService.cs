@@ -15,5 +15,6 @@ namespace EI_Console.Application.Interfaces.Services
         Task<bool> DeleteAsync(int id, CancellationToken ct = default);
         Task<JobDto?> SavePipelineAsync(int id, SavePipelineRequest request, CancellationToken ct = default);
         Task<JobDto?> SetStatusAsync(int id, string status, CancellationToken ct = default);
+        Task<JobDto?> PublishAsync(int id, CancellationToken ct = default);
     }
 }
