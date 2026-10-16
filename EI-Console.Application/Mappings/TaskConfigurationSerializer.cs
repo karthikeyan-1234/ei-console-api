@@ -1,4 +1,5 @@
 ﻿using _04_EI_Console.Shared.Application.Contracts;
+using _04_EI_Console.Shared.Application.Contracts.Jobs;
 
 using System;
 using System.Collections.Generic;
@@ -53,6 +54,7 @@ namespace EI_Console.Application.Mappings
                 QueryMode = dto.QueryMode,
                 BodyKind = dto.BodyKind,
                 RawContentType = dto.RawContentType,
+                Headers = dto.Headers?.ToList(),
                 FormFields = dto.FormFields?.ToList(),
             };
 
@@ -107,6 +109,7 @@ namespace EI_Console.Application.Mappings
             public string? BodyKind { get; set; }
             public string? RawContentType { get; set; }
             public List<FormFieldDto>? FormFields { get; set; }
+            public List<HeaderDto>? Headers { get; set; }
 
         }
     }

@@ -176,9 +176,22 @@ namespace EI_Console.Application.Pipeline
                 }
             }
 
+            // Default: counts reflect the top-level task walk.
             exec.SuccessCount = succeeded;
             exec.FailureCount = failed;
             exec.ItemCount = rootTasks.Count;
+
+            // If the pipeline produced scatter items (any iterator ran), the
+            // operator cares about rows processed, not tasks walked. Recompute
+            // from the actual item outcomes so a Scatter Test execution shows
+            // "100/100", not "2/2".
+            var scatterRows = await _scatter.GetByExecutionAsync(exec.ExecutionId, ct);
+            if (scatterRows.Count > 0)
+            {
+                exec.ItemCount = scatterRows.Count;
+                exec.SuccessCount = scatterRows.Count(s => s.Status == ScatterItemStatus.Completed);
+                exec.FailureCount = scatterRows.Count(s => s.Status == ScatterItemStatus.Failed);
+            }
 
             if (failed == 0)
             {
@@ -201,7 +214,7 @@ namespace EI_Console.Application.Pipeline
 
             _log.LogInformation(
                 "Execution {ExecutionId} finished with status {Status} ({Ok} ok, {Fail} failed)",
-                executionId, exec.Status, succeeded, failed);
+                executionId, exec.Status, exec.SuccessCount, exec.FailureCount);
         }
 
         // -----------------------------------------------------------------
@@ -292,7 +305,7 @@ namespace EI_Console.Application.Pipeline
             var started = DateTimeOffset.UtcNow;
 
             await _realtime.TaskStartedAsync(
-    exec.ExecutionId, (int)exec.JobId, branch.TaskId, branch.TaskName, ct);
+                exec.ExecutionId, (int)exec.JobId, branch.TaskId, branch.TaskName, ct);
 
             var laneOrder = Interlocked.Increment(ref orderBox.Value);
 
@@ -343,10 +356,17 @@ namespace EI_Console.Application.Pipeline
                 }
                 catch (Exception ex)
                 {
+                    var crashedAt = DateTimeOffset.UtcNow;
                     await WriteLogAsync(exec, branch, laneOrder, TaskExecutionStatus.Failed,
                         preForkContext.Snapshot(), null,
                         $"Condition evaluation failed: {ex.Message}",
-                        1, started, DateTimeOffset.UtcNow, ct);
+                        1, started, crashedAt, ct);
+
+                    // Pair with TaskStartedAsync above — no orphans in runningTaskIds.
+                    await _realtime.TaskCompletedAsync(
+                        exec.ExecutionId, (int)exec.JobId, branch.TaskId, branch.TaskName,
+                        "Failed", (int)(crashedAt - started).TotalMilliseconds, ct);
+
                     return new LaneResult(false, null, "Failed");
                 }
             }
@@ -357,10 +377,16 @@ namespace EI_Console.Application.Pipeline
 
             if (!shouldRun)
             {
+                var skippedAt = DateTimeOffset.UtcNow;
                 await WriteLogAsync(exec, branch, laneOrder, TaskExecutionStatus.Skipped,
                     preForkContext.Snapshot(), null,
                     $"Condition '{condition}' was not satisfied",
-                    1, started, DateTimeOffset.UtcNow, ct);
+                    1, started, skippedAt, ct);
+
+                await _realtime.TaskCompletedAsync(
+                    exec.ExecutionId, (int)exec.JobId, branch.TaskId, branch.TaskName,
+                    "Skipped", (int)(skippedAt - started).TotalMilliseconds, ct);
+
                 return new LaneResult(true, null, "Skipped");
             }
 
@@ -393,15 +419,19 @@ namespace EI_Console.Application.Pipeline
                 anyFailed ? $"Lane '{branch.TaskName}' had a failing child" : null,
                 1, started, completed, ct);
 
-            // Pair with the TaskStartedAsync published above. Without this, a
-            // skipped lane's id stays in the console's runningTaskIds set and the
-            // card remains highlighted forever.
+            // Pair with TaskStartedAsync. Status reflects the lane's actual
+            // outcome, not a skip.
             await _realtime.TaskCompletedAsync(
                 exec.ExecutionId, (int)exec.JobId, branch.TaskId, branch.TaskName,
-                "Skipped", (int)(completed - started).TotalMilliseconds, ct);
+                anyFailed ? "Failed" : "Success",
+                (int)(completed - started).TotalMilliseconds, ct);
 
-            return new LaneResult(true, null, "Skipped");
+            return new LaneResult(
+                !anyFailed,
+                laneContext.Current,
+                anyFailed ? "Failed" : "Success");
         }
+
         // -----------------------------------------------------------------
         // JoinPoint — barrier after a fork
         // -----------------------------------------------------------------
@@ -415,7 +445,7 @@ namespace EI_Console.Application.Pipeline
         {
             var started = DateTimeOffset.UtcNow;
             await _realtime.TaskStartedAsync(
-    exec.ExecutionId, (int)exec.JobId, join.TaskId, join.TaskName, ct);
+                exec.ExecutionId, (int)exec.JobId, join.TaskId, join.TaskName, ct);
             var snapshot = context.Snapshot();
 
             var cfg = JsonSerializer.Deserialize<JoinConfigLite>(join.ConfigurationJson ?? "{}");
@@ -425,9 +455,15 @@ namespace EI_Console.Application.Pipeline
             var current = context.Current;
             if (!current.HasValue || current.Value.ValueKind != JsonValueKind.Object)
             {
+                var failedAt = DateTimeOffset.UtcNow;
                 await WriteLogAsync(exec, join, orderIndex, TaskExecutionStatus.Failed,
                     snapshot, null, "JoinPoint found no upstream fork output",
-                    1, started, DateTimeOffset.UtcNow, ct);
+                    1, started, failedAt, ct);
+
+                await _realtime.TaskCompletedAsync(
+                    exec.ExecutionId, (int)exec.JobId, join.TaskId, join.TaskName,
+                    "Failed", (int)(failedAt - started).TotalMilliseconds, ct);
+
                 return false;
             }
 
@@ -489,7 +525,7 @@ namespace EI_Console.Application.Pipeline
         }
 
         // -----------------------------------------------------------------
-        // Existing task runner (unchanged except for the note about order)
+        // Existing task runner
         // -----------------------------------------------------------------
 
         private async Task<bool> RunTaskAsync(
@@ -497,7 +533,8 @@ namespace EI_Console.Application.Pipeline
             JobTask task,
             PipelineContext context,
             int orderIndex,
-            CancellationToken ct)
+            CancellationToken ct,
+            Action<int?>? httpStatusSink = null)
         {
             Protocol? protocol = null;
             if (task.ConnectionId is int connId)
@@ -515,7 +552,8 @@ namespace EI_Console.Application.Pipeline
                 return false;
             }
 
-            await _realtime.TaskStartedAsync(exec.ExecutionId, (int)exec.JobId, task.TaskId, task.TaskName, ct);
+            await _realtime.TaskStartedAsync(
+                exec.ExecutionId, (int)exec.JobId, task.TaskId, task.TaskName, ct);
 
             var started = DateTimeOffset.UtcNow;
             var inputSnapshot = context.Snapshot();
@@ -525,11 +563,20 @@ namespace EI_Console.Application.Pipeline
                 var outcome = await executor.ExecuteAsync(task, context, ct);
                 var completed = DateTimeOffset.UtcNow;
 
+                // Hand the HTTP status (when the executor set one) to the caller.
+                // Used by the iterator to populate scatter_gather_items.http_status_code.
+                httpStatusSink?.Invoke(outcome.HttpStatusCode);
+
                 if (!outcome.Success)
                 {
+                    await WriteLogAsync(exec, task, orderIndex, TaskExecutionStatus.Failed,
+                        inputSnapshot, null, outcome.ErrorMessage,
+                        attempt: 1, started, completed, ct);
+
                     await _realtime.TaskCompletedAsync(
                         exec.ExecutionId, (int)exec.JobId, task.TaskId, task.TaskName,
                         "Failed", (int)(completed - started).TotalMilliseconds, ct);
+
                     return false;
                 }
 
@@ -631,13 +678,15 @@ namespace EI_Console.Application.Pipeline
             catch (Exception ex)
             {
                 _log.LogError(ex, "Task {TaskId} threw during execution", task.TaskId);
+                var crashedAt = DateTimeOffset.UtcNow;
                 await WriteLogAsync(exec, task, orderIndex, TaskExecutionStatus.Failed,
                     inputSnapshot, null, ex.Message,
-                    attempt: 1, started, DateTimeOffset.UtcNow, ct);
-                var crashedAt = DateTimeOffset.UtcNow;
+                    attempt: 1, started, crashedAt, ct);
+
                 await _realtime.TaskCompletedAsync(
                     exec.ExecutionId, (int)exec.JobId, task.TaskId, task.TaskName,
                     "Failed", (int)(crashedAt - started).TotalMilliseconds, ct);
+
                 return false;
             }
         }
@@ -671,12 +720,18 @@ namespace EI_Console.Application.Pipeline
             var exec = await _executions.GetByIdAsync(executionId, ct)
                 ?? throw new InvalidOperationException($"Execution {executionId} not found.");
 
-            var ok = await RunTaskAsync(exec, sub, context, orderIndex, ct);
+            // Capture the HTTP status from the outcome. Null for non-HTTP
+            // executors (SQL, JSONata, etc.).
+            int? httpStatus = null;
+            var ok = await RunTaskAsync(
+                exec, sub, context, orderIndex, ct,
+                s => httpStatus = s);
 
             scatterItem.Status = ok ? ScatterItemStatus.Completed : ScatterItemStatus.Failed;
             scatterItem.CompletedAt = DateTimeOffset.UtcNow;
             scatterItem.OutputPayload = context.Current?.GetRawText();
             scatterItem.ErrorMessage = ok ? null : $"Subtask '{sub.TaskName}' failed.";
+            scatterItem.HttpStatusCode = httpStatus;
             await _uow.SaveChangesAsync(ct);
 
             return ok;

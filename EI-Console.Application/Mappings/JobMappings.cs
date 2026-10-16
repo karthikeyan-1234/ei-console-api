@@ -23,7 +23,13 @@ namespace EI_Console.Application.Mappings;
 
         public static string Time(this DateTimeOffset value) =>
             value.ToString(TimeOnly, System.Globalization.CultureInfo.InvariantCulture);
-    }
+
+        public static string Iso(this DateTimeOffset? value) =>
+        value.HasValue ? value.Value.ToString("o", System.Globalization.CultureInfo.InvariantCulture) : "";
+
+        public static string Iso(this DateTimeOffset value) =>
+            value.ToString("o", System.Globalization.CultureInfo.InvariantCulture);
+}
 
     public static class JobMappings
     {
@@ -131,6 +137,7 @@ namespace EI_Console.Application.Mappings;
         Url: cfg?.Url,
         Method: cfg?.Method,
         Body: cfg?.Body,
+        Headers: cfg?.Headers,
         SampleResponse: cfg?.SampleResponse,
         InputSource: cfg?.InputSource ?? t.Transform?.InputSource,
         Jsonata: cfg?.Jsonata ?? t.Transform?.JsonataExpression,

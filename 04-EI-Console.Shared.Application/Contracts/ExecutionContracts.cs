@@ -55,7 +55,8 @@ namespace _04_EI_Console.Shared.Application.Contracts
         string Started,
         string Completed,
         int DurationMs,
-        string Summary);
+        string Summary,
+        string? Error);
 
     public sealed record TriggerJobResponse(string ExecutionId, string StatusUrl);
 

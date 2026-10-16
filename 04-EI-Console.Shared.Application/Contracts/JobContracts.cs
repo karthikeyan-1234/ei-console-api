@@ -1,4 +1,6 @@
-﻿using System;
+﻿using _04_EI_Console.Shared.Application.Contracts.Jobs;
+
+using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -54,6 +56,7 @@ namespace _04_EI_Console.Shared.Application.Contracts
         string? Url,
         string? Method,
         string? Body,
+         IReadOnlyList<HeaderDto>? Headers,
             string? BodyKind,          // "Json" | "Raw" | "UrlEncoded" | "FormData" | null (=Json)
     string? RawContentType,    // used when BodyKind = "Raw"
     IReadOnlyList<FormFieldDto>? FormFields,   // used when BodyKind = "FormData" or "UrlEncoded"

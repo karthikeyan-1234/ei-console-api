@@ -7,6 +7,7 @@ using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Logging;
 
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace EI_Console.Infrastructure.Pipeline.Executors
 {
@@ -15,6 +16,16 @@ namespace EI_Console.Infrastructure.Pipeline.Executors
         private readonly IConnectionRepository _connections;
         private readonly ISqlConnectionStringResolver _sqlResolver;
         private readonly ILogger<SqlQueryExecutor> _log;
+
+        /// <summary>
+        /// Matches SQL Server named parameters: @identifier. Used to discover which
+        /// placeholders in a query text should be bound from the pipeline context.
+        /// Does not attempt to skip occurrences inside string literals — a limitation
+        /// shared with most SQL tooling. Values with @ inside strings should be
+        /// parameterized or escaped by the operator.
+        /// </summary>
+        private static readonly Regex ParameterPattern =
+            new(@"@([a-zA-Z_][a-zA-Z0-9_]*)", RegexOptions.Compiled);
 
         public SqlQueryExecutor(
             IConnectionRepository connections,
@@ -65,6 +76,13 @@ namespace EI_Console.Infrastructure.Pipeline.Executors
                 {
                     CommandTimeout = timeout,
                 };
+
+                // Bind any @name placeholders in the query from the current pipeline item.
+                // When iterating, the current item is one array element; when not, it's the
+                // whole upstream payload. Names not present in the context are left unbound,
+                // which surfaces as a clear "Must declare the scalar variable" error from
+                // SQL Server rather than silently inserting null.
+                BindParameters(cmd, context.Current);
 
                 JsonElement output;
 
@@ -130,6 +148,43 @@ namespace EI_Console.Infrastructure.Pipeline.Executors
             }
         }
 
+
+        private static void BindParameters(SqlCommand cmd, JsonElement? current)
+        {
+            if (current is not { ValueKind: JsonValueKind.Object } obj) return;
+
+            var bound = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (Match m in ParameterPattern.Matches(cmd.CommandText))
+            {
+                var name = m.Groups[1].Value;
+                if (!bound.Add(name)) continue;   // process each distinct name once
+
+                foreach (var prop in obj.EnumerateObject())
+                {
+                    if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        cmd.Parameters.AddWithValue("@" + name, JsonToClr(prop.Value));
+                        break;
+                    }
+                }
+            }
+        }
+
+        private static object JsonToClr(JsonElement el)
+        {
+            return el.ValueKind switch
+            {
+                JsonValueKind.String => el.GetString() ?? (object)DBNull.Value,
+                JsonValueKind.Number when el.TryGetInt64(out var l) => l,
+                JsonValueKind.Number => el.GetDouble(),
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.Null => DBNull.Value,
+                JsonValueKind.Object or JsonValueKind.Array => el.GetRawText(),
+                _ => DBNull.Value,
+            };
+        }
         private sealed class TaskConfigLite
         {
             public string? Body { get; set; }

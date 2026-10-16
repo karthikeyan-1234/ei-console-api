@@ -20,13 +20,23 @@ namespace EI_Console.Infrastructure.Repositories
 
         public Task<List<IntegrationJob>> GetAllAsync(CancellationToken ct = default) =>
             _db.IntegrationJobs.AsNoTracking()
+                .Include(j => j.Schedule)
+                .Include(j => j.Versions)
+                    .ThenInclude(v => v.Tasks)
+                        .ThenInclude(t => t.Iterator)
                 .OrderBy(j => j.JobName)
+                .AsSplitQuery()
                 .ToListAsync(ct);
 
         public Task<List<IntegrationJob>> GetByTenantAsync(int tenantId, CancellationToken ct = default) =>
             _db.IntegrationJobs.AsNoTracking()
                 .Where(j => j.TenantId == tenantId)
+                .Include(j => j.Schedule)
+                .Include(j => j.Versions)
+                    .ThenInclude(v => v.Tasks)
+                        .ThenInclude(t => t.Iterator)
                 .OrderBy(j => j.JobName)
+                .AsSplitQuery()
                 .ToListAsync(ct);
 
         public Task<IntegrationJob?> GetByIdAsync(int id, CancellationToken ct = default) =>

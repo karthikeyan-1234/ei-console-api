@@ -120,6 +120,8 @@ namespace EI_Console.Infrastructure.DependencyInjection
 
             services.AddScoped<IApiRequestBodyBuilder, ApiRequestBodyBuilder>();
 
+            services.AddScoped<ITemplateResolver, TemplateResolver>();
+
             services.AddHttpClient("SubscriptionTokenExchange")
     .ConfigurePrimaryHttpMessageHandler(() =>
     {

@@ -76,6 +76,13 @@ public sealed class ApiRequestBodyBuilder : IApiRequestBodyBuilder
                     var multipart = new MultipartFormDataContent();
                     foreach (var field in formFields ?? Array.Empty<FormFieldDto>())
                     {
+                        // Skip unfilled placeholder rows entirely.
+                        if (string.IsNullOrWhiteSpace(field.Key)
+                            && string.IsNullOrWhiteSpace(field.Value))
+                        {
+                            continue;
+                        }
+
                         if (string.Equals(field.ValueType, "File", StringComparison.OrdinalIgnoreCase))
                         {
                             await AddFilePartAsync(multipart, field, context, ct);
@@ -152,6 +159,17 @@ public sealed class ApiRequestBodyBuilder : IApiRequestBodyBuilder
         PipelineContext context,
         CancellationToken ct)
     {
+
+        // A row that has neither a key nor a value is an unfilled placeholder
+        // in the editor. Skip it without a warning — it isn't a mistake.
+        if (string.IsNullOrWhiteSpace(field.Key)
+            && string.IsNullOrWhiteSpace(field.Value))
+        {
+            return;
+        }
+
+
+
         var url = await EvaluateValueAsync(field.Value, context, ct);
         if (string.IsNullOrWhiteSpace(url))
         {

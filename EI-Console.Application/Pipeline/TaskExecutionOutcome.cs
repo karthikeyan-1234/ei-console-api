@@ -1,24 +1,23 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Text;
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace EI_Console.Application.Pipeline
 {
     /// <summary>
     /// What an executor returns after a task runs. Success carries the output
-    /// payload that flows to the next task; failure carries an error message
-    /// and the output summary for the task log.
+    /// payload that flows to the next task; failure carries an error message.
+    /// HttpStatusCode is populated by the HTTP-based executors and threaded
+    /// into scatter_gather_items by the runner.
     /// </summary>
     public sealed record TaskExecutionOutcome(
         bool Success,
         JsonElement? Output,
-        string? ErrorMessage = null)
+        string? ErrorMessage = null,
+        int? HttpStatusCode = null)
     {
-        public static TaskExecutionOutcome Ok(JsonElement? output) =>
-            new(true, output);
+        public static TaskExecutionOutcome Ok(JsonElement? output, int? httpStatusCode = null) =>
+            new(true, output, null, httpStatusCode);
 
-        public static TaskExecutionOutcome Fail(string message) =>
-            new(false, null, message);
+        public static TaskExecutionOutcome Fail(string message, int? httpStatusCode = null) =>
+            new(false, null, message, httpStatusCode);
     }
 }

@@ -21,7 +21,7 @@ namespace EI_Console.Application.Mappings;
                 Job: jobName,
                 TenantId: e.Job?.TenantId.ToString() ?? "—",
                 Status: e.Status.ToString(),
-                Started: e.StartedAt.Time(),
+                Started: e.StartedAt.Iso(),
                 ItemsDone: e.SuccessCount,
                 ItemsTotal: e.ItemCount,
                 Failures: e.FailureCount,
@@ -74,9 +74,10 @@ namespace EI_Console.Application.Mappings;
                 Type: taskType,
                 Status: l.Status.ToString(),
                 Attempt: l.AttemptNumber,
-                Started: l.StartedAt.Time(),
-                Completed: l.CompletedAt.Time(),
+                Started: l.StartedAt.Iso(),
+                Completed: l.CompletedAt.Iso(),
                 DurationMs: (int)(l.DurationMs ?? 0),
-                Summary: l.OutputSummary ?? "{}");
+                Summary: l.OutputSummary ?? "{}",
+                Error: l.ErrorDetails);
         }
     }
