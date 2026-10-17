@@ -13,5 +13,8 @@ namespace EI_Console.Application.Interfaces.Infrastructure
         Task<JobExecution?> GetByIdAsync(Guid executionId, CancellationToken ct = default);
         Task<bool> IdempotencyKeyExistsAsync(string key, DateTimeOffset since, CancellationToken ct = default);
         void Add(JobExecution execution);
+
+        Task<Dictionary<int, DateTimeOffset>> GetLastStartedAtByJobAsync(
+    IReadOnlyCollection<int> jobIds, CancellationToken ct = default);
     }
 }

@@ -17,6 +17,17 @@ namespace EI_Console.Infrastructure.Repositories
 
         public ExecutionRepository(EiDbContext db) => _db = db;
 
+        public async Task<Dictionary<int, DateTimeOffset>> GetLastStartedAtByJobAsync(
+    IReadOnlyCollection<int> jobIds, CancellationToken ct = default)
+        {
+            if (jobIds.Count == 0) return new();
+            return await _db.JobExecutions
+                .Where(e => jobIds.Contains(e.JobId))
+                .GroupBy(e => e.JobId)
+                .Select(g => new { JobId = g.Key, Last = g.Max(e => e.StartedAt) })
+                .ToDictionaryAsync(x => x.JobId, x => x.Last, ct);
+        }
+
         public Task<List<JobExecution>> GetRecentAsync(int take, CancellationToken ct = default) =>
             _db.JobExecutions
                 .AsNoTracking()

@@ -33,7 +33,7 @@ namespace EI_Console.Application.Mappings;
 
     public static class JobMappings
     {
-    public static JobSummaryDto ToSummaryDto(this IntegrationJob j)
+    public static JobSummaryDto ToSummaryDto(this IntegrationJob j, DateTimeOffset? lastRun)
     {
         var working = j.Versions
             .OrderByDescending(v => v.VersionNumber)
@@ -57,7 +57,7 @@ namespace EI_Console.Application.Mappings;
             Trigger: j.TriggerType.ToString(),
             Cron: j.Schedule?.CronExpression ?? "—",
             Created: j.CreatedAt.Full(),
-            LastRun: "—",
+            LastRun: lastRun?.Full() ?? "—",
             Next: ComputeNext(j),
             Description: j.Description ?? string.Empty,
             Version: working?.VersionNumber ?? 0,
@@ -70,7 +70,7 @@ namespace EI_Console.Application.Mappings;
             IteratorCount: tasks.Count(t => t.Iterator != null));
     }
 
-    public static JobDto ToDto(this IntegrationJob j)
+    public static JobDto ToDto(this IntegrationJob j, DateTimeOffset? lastRun)
     {
         var working = j.Versions
             .OrderByDescending(v => v.VersionNumber)
@@ -98,7 +98,7 @@ namespace EI_Console.Application.Mappings;
             Trigger: j.TriggerType.ToString(),
             Cron: j.Schedule?.CronExpression ?? "—",
             Created: j.CreatedAt.Full(),
-            LastRun: "—",
+            LastRun: lastRun?.Full() ?? "—",
             Next: ComputeNext(j),
             Description: j.Description ?? string.Empty,
             Version: working?.VersionNumber ?? 0,

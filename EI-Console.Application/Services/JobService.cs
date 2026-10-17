@@ -50,13 +50,22 @@ namespace EI_Console.Application.Services
         public async Task<List<JobSummaryDto>> ListAsync(CancellationToken ct = default)
         {
             var all = await _jobs.GetAllAsync(ct);
-            return all.Select(j => j.ToSummaryDto()).ToList();
+            var lastRuns = await _executions.GetLastStartedAtByJobAsync(
+                all.Select(j => j.JobId).ToList(), ct);
+
+            return all.Select(j => j.ToSummaryDto(
+                lastRuns.TryGetValue(j.JobId, out var t) ? t : null)).ToList();
         }
 
         public async Task<JobDto?> GetAsync(int id, CancellationToken ct = default)
         {
             var job = await _jobs.GetWithPipelineAsync(id, ct);
-            return job?.ToDto();
+            if (job is null) return null;
+
+            var lastRuns = await _executions.GetLastStartedAtByJobAsync(new[] { id }, ct);
+            var lastRun = lastRuns.TryGetValue(id, out var t) ? t : (DateTimeOffset?)null;
+
+            return job.ToDto(lastRun);
         }
 
         public async Task<JobDto?> PublishAsync(int id, CancellationToken ct = default)
@@ -80,7 +89,7 @@ namespace EI_Console.Application.Services
                     job.UpdatedAt = DateTimeOffset.UtcNow;
                     await _uow.SaveChangesAsync(ct);
                 }
-                return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
+                return await GetAsync(id, ct);
             }
 
             var tasks = await _jobs.GetTasksForVersionAsync(current.VersionId, ct);
@@ -113,7 +122,7 @@ namespace EI_Console.Application.Services
                 "Job {Id} published v{Version} and set to Active",
                 id, current.VersionNumber);
 
-            return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
+            return await GetAsync(id, ct);
         }
         
         
@@ -189,7 +198,7 @@ namespace EI_Console.Application.Services
             _log.LogInformation("Job {Name} (slug {Slug}) created with id {Id}",
                 job.JobName, job.EndpointSlug, job.JobId);
 
-            return (await _jobs.GetWithPipelineAsync(job.JobId, ct))!.ToDto();
+            return (await GetAsync(job.JobId, ct))!;
         }
 
         // -----------------------------------------------------------------
@@ -252,7 +261,7 @@ namespace EI_Console.Application.Services
                 await SavePipelineAsync(id, new SavePipelineRequest(request.Pipeline), ct);
             }
 
-            return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
+            return await GetAsync(id, ct);
         }
 
         public async Task<JobDto?> SetStatusAsync(int id, string status, CancellationToken ct = default)
@@ -265,7 +274,7 @@ namespace EI_Console.Application.Services
 
             // No-op if the status is already set. Prevents a spurious "Draft → Draft"
             // log line and avoids an unnecessary DB write.
-            if (job.Status == newStatus) return job.ToDto();
+            if (job.Status == newStatus) return await GetAsync(id, ct);
 
             var previous = job.Status;
             job.Status = newStatus;
@@ -292,7 +301,7 @@ namespace EI_Console.Application.Services
                 "Job {Id} status changed {Previous} → {New}",
                 id, previous, newStatus);
 
-            return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
+            return await GetAsync(id, ct);
         }
 
 
@@ -419,7 +428,7 @@ namespace EI_Console.Application.Services
                 "Pipeline saved for job {Id} — {RootCount} root task(s) on v{Version}",
                 id, request.Tasks.Count, current.VersionNumber);
 
-            return (await _jobs.GetWithPipelineAsync(id, ct))?.ToDto();
+            return await GetAsync(id, ct);
         }
         // -----------------------------------------------------------------
         // Helpers
