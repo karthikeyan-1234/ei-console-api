@@ -1,4 +1,7 @@
+using EI_Console.AI.DependencyInjection;
+using EI_Console.Application.Interfaces.Services;
 using EI_Console.Application.Pipeline;
+using EI_Console.Application.Services;
 using EI_Console.Infrastructure.DependencyInjection;
 using EI_Console.Infrastructure.Pipeline;
 
@@ -52,6 +55,10 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 
 builder.Services.AddRepositories();
 builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddEiAi(builder.Configuration);
+
+builder.Services.AddScoped<IChatService, ChatService>();
+
 
 builder.Host.UseWolverine(opts =>
 {
@@ -65,6 +72,11 @@ builder.Host.UseWolverine(opts =>
     // https://wolverinefx.net/guide/codegen.html
     opts.ServiceLocationPolicy =JasperFx.CodeGeneration.Model.ServiceLocationPolicy.AllowedButWarn;
 });
+
+builder.Services
+    .AddMcpServer()
+    .WithHttpTransport() // Uses SSE/HTTP stream
+    .WithToolsFromAssembly(); // Scans for our tool classes
 
 var app = builder.Build();
 
@@ -80,5 +92,10 @@ app.UseHttpsRedirection();
 app.UseAuthorization();
 
 app.MapControllers();
+
+
+app.MapMcp("/mcp");
 app.MapHub<EiHub>("/hubs/ei");     // single mapping — the only one
+
+
 app.Run();

@@ -117,6 +117,8 @@ namespace EI_Console.Infrastructure.DependencyInjection
             services.AddSingleton<IJsonataEvaluator, JsonataEvaluator>();
             services.AddScoped<IScatterGatherItemRepository, ScatterGatherItemRepository>();
 
+            services.AddHostedService<DatabaseInitializer>();
+
 
             services.AddScoped<IApiRequestBodyBuilder, ApiRequestBodyBuilder>();
 

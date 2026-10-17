@@ -5,6 +5,7 @@
     <Project Path="EI-Console.Shared/04-EI-Console.Shared.Infra.csproj" />
   </Folder>
   <Project Path="ei-console-api/00-ei-console-api.csproj" />
+  <Project Path="EI-Console.AI/EI-Console.AI.csproj" Id="bcd956a0-c5c4-4f2a-96d8-20c7331c9c4c" />
   <Project Path="EI-Console.Application/03-EI-Console.Application.csproj" />
   <Project Path="EI-Console.Domain/01-EI-Console.Domain.csproj" />
   <Project Path="EI-Console.Infrastructure/02-EI-Console.Infrastructure.csproj" />

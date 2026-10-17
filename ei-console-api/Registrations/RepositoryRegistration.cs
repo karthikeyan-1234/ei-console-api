@@ -19,6 +19,7 @@ namespace ei_console_api.Registrations
             services.AddScoped<IJobRepository, JobRepository>();
             services.AddScoped<IExecutionRepository, ExecutionRepository>();
             services.AddScoped<ITaskExecutionLogRepository, TaskExecutionLogRepository>();
+            services.AddScoped<IChatRepository, ChatRepository>();
             return services;
         }
     }
