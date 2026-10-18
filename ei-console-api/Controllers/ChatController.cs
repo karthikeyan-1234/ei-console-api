@@ -10,6 +10,8 @@ namespace ei_console_api.Controllers;
 [Route("api/ei/chat/sessions")]
 public sealed class ChatController : ControllerBase
 {
+    private static readonly System.Text.Json.JsonSerializerOptions _jsonOpts = new(System.Text.Json.JsonSerializerDefaults.Web);
+
     private readonly IChatService _service;
     public ChatController(IChatService service) => _service = service;
 
@@ -35,14 +37,36 @@ public sealed class ChatController : ControllerBase
     }
 
     [HttpPost("{id:guid}/messages")]
-    public async Task<ActionResult<SendChatMessageResponse>> Send(
-        Guid id, [FromBody] SendChatMessageRequest request, CancellationToken ct)
+    public async Task Send(Guid id, [FromBody] SendChatMessageRequest request, CancellationToken ct)
     {
-        var res = await _service.SendMessageAsync(id, request, ct);
-        return res is null ? NotFound() : res;
+        Response.Headers.Append("Content-Type", "text/event-stream");
+        Response.Headers.Append("Cache-Control", "no-cache");
+        Response.Headers.Append("Connection", "keep-alive");
+
+        // 1. Stream tokens
+        var result = await _service.StreamMessageAsync(id, request, async (token) =>
+        {
+            // Use _jsonOpts here!
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { type = "token", value = token }, _jsonOpts);
+            await Response.WriteAsync($"data: {payload}\n\n", ct);
+            await Response.Body.FlushAsync(ct);
+        }, ct);
+
+        // 2. Send final result
+        if (result != null)
+        {
+            // Use _jsonOpts here!
+            var payload = System.Text.Json.JsonSerializer.Serialize(new { type = "result", value = result }, _jsonOpts);
+            await Response.WriteAsync($"data: {payload}\n\n", ct);
+        }
+
+        await Response.WriteAsync("data: [DONE]\n\n", ct);
+        await Response.Body.FlushAsync(ct);
     }
 
     [HttpDelete("{id:guid}")]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct) =>
         await _service.DeleteSessionAsync(id, ct) ? NoContent() : NotFound();
+
+
 }

@@ -10,4 +10,5 @@ public interface IChatService
     Task<ChatSessionDto?> RenameSessionAsync(Guid sessionId, RenameChatSessionRequest request, CancellationToken ct = default);
     Task<SendChatMessageResponse?> SendMessageAsync(Guid sessionId, SendChatMessageRequest request, CancellationToken ct = default);
     Task<bool> DeleteSessionAsync(Guid sessionId, CancellationToken ct = default);
+    Task<SendChatMessageResponse?> StreamMessageAsync(Guid sessionId,SendChatMessageRequest request,Func<string, Task> onToken,CancellationToken ct = default);
 }

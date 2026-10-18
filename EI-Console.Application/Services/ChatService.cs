@@ -10,6 +10,7 @@ using EI_Console.Domain.Models;
 using EI_Console.Shared.Application;
 using EI_Console.Shared.Contracts;
 
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Options;
 using Microsoft.VisualBasic.FileIO;
@@ -175,9 +176,98 @@ public sealed class ChatService : IChatService
         session.Title = request.Title;
         session.UpdatedAt = DateTimeOffset.UtcNow;
 
-        await _uow.SaveChangesAsync(ct);
+        try
+        {
+            await _uow.SaveChangesAsync(ct);
+        }
+        catch (DbUpdateConcurrencyException ex)
+        {
+            // Option: Refresh database values from the store ("Store Wins") 
+            // or re-throw / handle the conflict.
+            foreach (var entry in ex.Entries)
+            {
+                if (entry.Entity is ChatSession)
+                {
+                    // Refresh values from database
+                    await entry.ReloadAsync(ct);
+
+                    // Optionally re-apply changes if you want Client Wins:
+                     entry.Property(nameof(ChatSession.Title)).CurrentValue = request.Title;
+                     await _uow.SaveChangesAsync(ct);
+                }
+                else
+                {
+                    throw;
+                }
+            }
+        }
+
         return ToSessionDto(session);
     }
+
+    public async Task<SendChatMessageResponse?> StreamMessageAsync(
+        Guid sessionId,
+        SendChatMessageRequest request,
+        Func<string, Task> onToken,
+        CancellationToken ct = default)
+    {
+        var session = await _repo.GetAsync(sessionId, ct);
+        if (session is null) return null;
+
+        var history = await _repo.GetMessagesAsync(sessionId, ct);
+        var nextSeq = history.Count == 0 ? 1 : history.Max(m => m.SequenceNumber) + 1;
+
+        var userMessage = new DomainChatMessage
+        {
+            SessionId = sessionId,
+            SequenceNumber = nextSeq,
+            Role = ChatRole.User,
+            Content = request.Content,
+            Status = ChatMessageStatus.Sent,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        _repo.AddMessage(userMessage);
+        await _uow.SaveChangesAsync(ct);
+
+        var chatMessages = new List<ChatMessageAI> { new(ChatRoleAI.System, "You are the EI Console assistant. Be concise.") };
+        foreach (var m in history.TakeLast(10)) chatMessages.Add(new(MapRole(m.Role), m.Content));
+        chatMessages.Add(new(ChatRoleAI.User, request.Content));
+
+        var sb = new StringBuilder();
+        var stream = _chat.GetStreamingResponseAsync(chatMessages, new ChatOptions { ModelId = _ai.Model }, ct);
+
+        await foreach (var update in stream)
+        {
+            if (!string.IsNullOrEmpty(update.Text))
+            {
+                sb.Append(update.Text);
+                await onToken(update.Text); // Fire the callback!
+            }
+        }
+
+        var assistantMessage = new DomainChatMessage
+        {
+            SessionId = sessionId,
+            SequenceNumber = nextSeq + 1,
+            Role = ChatRole.Assistant,
+            Content = sb.ToString(),
+            Model = _ai.Model,
+            Status = ChatMessageStatus.Sent,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        _repo.AddMessage(assistantMessage);
+
+        session.MessageCount += 2;
+        session.LastMessageAt = DateTimeOffset.UtcNow;
+        session.LastMessagePreview = Truncate(sb.ToString(), 120);
+        await _uow.SaveChangesAsync(ct);
+
+        return new SendChatMessageResponse(
+            ToMessageDto(userMessage),
+            ToMessageDto(assistantMessage),
+            ToSessionDto(session));
+    }
+
 
     private static ChatRoleAI MapRole(ChatRole role) => role switch
     {
