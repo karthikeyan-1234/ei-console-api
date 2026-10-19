@@ -9,6 +9,7 @@ namespace EI_Console.Application.Interfaces.Infrastructure
     public interface IJobRepository
     {
         Task<List<IntegrationJob>> GetAllAsync(CancellationToken ct = default);
+        Task<List<IntegrationJob>> GetAllAsync(int filter, CancellationToken ct = default);
         Task<List<IntegrationJob>> GetByTenantAsync(int tenantId, CancellationToken ct = default);
         Task<IntegrationJob?> GetByIdAsync(int id, CancellationToken ct = default);
         Task<IntegrationJob?> GetWithPipelineAsync(int id, CancellationToken ct = default);

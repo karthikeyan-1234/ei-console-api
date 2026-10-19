@@ -1,12 +1,13 @@
-﻿using System.ClientModel;
-
-using EI_Console.AI.Configuration;
+﻿using EI_Console.AI.Configuration;
+using EI_Console.AI.Orchestration;
 
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 using OpenAI;
+
+using System.ClientModel;
 
 namespace EI_Console.AI.DependencyInjection;
 
@@ -26,6 +27,9 @@ public static class AiServiceCollectionExtensions
 
             return openAi.GetChatClient(opts.Model).AsIChatClient();
         });
+
+        services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
+
 
         return services;
     }

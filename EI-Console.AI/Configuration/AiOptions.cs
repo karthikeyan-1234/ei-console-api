@@ -7,4 +7,7 @@ public sealed class AiOptions
     public string Model { get; set; } = "qwen3.5:4b";
     public string ApiKey { get; set; } = "ollama";
     public int MaxOutputTokens { get; set; } = 2048;
+
+    public string McpEndpoint { get; set; } = "https://localhost:7107/mcp";
+
 }

@@ -9,6 +9,7 @@ namespace EI_Console.Application.Interfaces.Services
     public interface IJobService
     {
         Task<List<JobSummaryDto>> ListAsync(CancellationToken ct = default);
+        Task<List<JobSummaryDto>> ListAsync(int filterCount, CancellationToken ct = default);
         Task<JobDto?> GetAsync(int id, CancellationToken ct = default);
         Task<JobDto> CreateAsync(CreateJobRequest request, CancellationToken ct = default);
         Task<JobDto?> UpdateAsync(int id, UpdateJobRequest request, CancellationToken ct = default);

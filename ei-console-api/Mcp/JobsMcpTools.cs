@@ -25,15 +25,20 @@ public sealed class JobsMcpTools
         _bus = bus;
     }
 
-    [McpServerTool, Description("List all jobs")]
+    [McpServerTool(Name = "list_jobs"), Description("List all jobs")]
     public Task<List<JobSummaryDto>> ListJobs(CancellationToken ct = default)
         => _jobs.ListAsync(ct);
 
-    [McpServerTool, Description("Get a job by ID")]
+    //List Jobs with filter count
+    [McpServerTool(Name = "list_jobs_with_filter"), Description("List all jobs with filter count")]
+    public Task<List<JobSummaryDto>> ListJobs(int filterCount, CancellationToken ct = default)
+        => _jobs.ListAsync(filterCount, ct);
+
+    [McpServerTool(Name = "get_job"), Description("Get a job by ID")]
     public Task<JobDto?> GetJob(int id, CancellationToken ct = default)
         => _jobs.GetAsync(id, ct);
 
-    [McpServerTool, Description("Create a new job")]
+    [McpServerTool(Name = "create_job"), Description("Create a new job")]
     public Task<JobDto> CreateJob(
         [Description("Name of the job")] string name,
         [Description("Tenant ID (default '1')")] string tenantId,
@@ -46,7 +51,7 @@ public sealed class JobsMcpTools
         return _jobs.CreateAsync(req, ct);
     }
 
-    [McpServerTool, Description("Save the pipeline tasks for a job")]
+    [McpServerTool(Name = "save_pipeline"), Description("Save the pipeline tasks for a job")]
     public Task<JobDto?> SavePipeline(
         int id,
         [Description("The array of pipeline tasks")] List<PipelineTaskDto> tasks,
@@ -56,11 +61,11 @@ public sealed class JobsMcpTools
         return _jobs.SavePipelineAsync(id, req, ct);
     }
 
-    [McpServerTool, Description("Publish a job to make it active")]
+    [McpServerTool(Name = "publish_job"), Description("Publish a job to make it active")]
     public Task<JobDto?> PublishJob(int id, CancellationToken ct = default)
         => _jobs.PublishAsync(id, ct);
 
-    [McpServerTool, Description("Trigger a job manually and start execution")]
+    [McpServerTool(Name = "trigger_job"), Description("Trigger a job manually and start execution")]
     public async Task<string> TriggerJob(int id, CancellationToken ct = default)
     {
         var executionId = await _executions.TriggerAsync(id, "Manual", null, null, ct);

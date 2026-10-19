@@ -47,6 +47,16 @@ namespace EI_Console.Application.Services
         // Read
         // -----------------------------------------------------------------
 
+        public async Task<List<JobSummaryDto>> ListAsync(int filterCount, CancellationToken ct = default)
+        {
+            var all = await _jobs.GetAllAsync(filterCount, ct);
+            var lastRuns = await _executions.GetLastStartedAtByJobAsync(
+                all.Select(j => j.JobId).ToList(), ct);
+
+            return all.Select(j => j.ToSummaryDto(
+                lastRuns.TryGetValue(j.JobId, out var t) ? t : null)).ToList();
+        }
+
         public async Task<List<JobSummaryDto>> ListAsync(CancellationToken ct = default)
         {
             var all = await _jobs.GetAllAsync(ct);
