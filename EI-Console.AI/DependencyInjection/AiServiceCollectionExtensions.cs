@@ -1,4 +1,5 @@
-﻿using EI_Console.AI.Configuration;
+﻿using EI_Console.AI.Agents;
+using EI_Console.AI.Configuration;
 using EI_Console.AI.Orchestration;
 
 using Microsoft.Extensions.AI;
@@ -28,6 +29,10 @@ public static class AiServiceCollectionExtensions
             return openAi.GetChatClient(opts.Model).AsIChatClient();
         });
 
+        services.AddSingleton<IConversationStore, InMemoryConversationStore>(); // must be singleton
+        services.AddSingleton<IMcpKernelPluginBuilder, McpKernelPluginBuilder>();
+        services.AddSingleton<IMcpToolRegistry, McpToolRegistry>();
+        services.AddScoped<IEiAgentFactory, EiAgentFactory>();
         services.AddScoped<IAgentOrchestrator, AgentOrchestrator>();
 
 

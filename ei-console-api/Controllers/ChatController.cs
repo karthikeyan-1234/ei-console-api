@@ -41,7 +41,7 @@ public sealed class ChatController : ControllerBase
     {
         Response.Headers.Append("Content-Type", "text/event-stream");
         Response.Headers.Append("Cache-Control", "no-cache");
-        Response.Headers.Append("Connection", "keep-alive");
+        
 
         // 1. Stream tokens
         var result = await _service.StreamMessageAsync(id, request, async (token) =>

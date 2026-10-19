@@ -1,102 +1,111 @@
-﻿using EI_Console.AI.Configuration;
+﻿using EI_Console.AI.Agents;
+using EI_Console.AI.Configuration;
 
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.SemanticKernel.Agents;
+using Microsoft.SemanticKernel.ChatCompletion;
+using Microsoft.Win32;
 
 using ModelContextProtocol.Client;
 
 using System.ClientModel;
 using System.ComponentModel;
+using System.Runtime.CompilerServices;
 
 namespace EI_Console.AI.Orchestration;
 
-public interface IAgentOrchestrator
-{
-    IAsyncEnumerable<string> StreamAsync(string userMessage, CancellationToken ct = default);
-}
+
 
 public sealed class AgentOrchestrator : IAgentOrchestrator
 {
     private readonly IChatClient _chat;
-    private readonly AiOptions _options;
 
-    public AgentOrchestrator(IChatClient chat, Microsoft.Extensions.Options.IOptions<AiOptions> options)
+    private readonly IMcpToolRegistry _registry;
+    private readonly IEiAgentFactory _factory;
+    private readonly IConversationStore _conversations;
+    private readonly AiOptions _options;
+    private readonly ILogger<AgentOrchestrator> _logger;
+
+    public AgentOrchestrator(
+        IChatClient chat,
+        IMcpToolRegistry registry,
+        IEiAgentFactory factory,
+        IConversationStore conversations,
+        IOptions<AiOptions> options,
+        ILogger<AgentOrchestrator> logger)
     {
         _chat = chat;
+        _registry = registry;
+        _factory = factory;
+        _conversations = conversations;
         _options = options.Value;
+        _logger = logger;
     }
-
-    public async IAsyncEnumerable<string> StreamAsync(string userMessage, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken ct = default)
+    public async IAsyncEnumerable<string> StreamAsync(
+            string userMessage,
+            string conversationId,
+            [EnumeratorCancellation] CancellationToken ct = default)
     {
-        // 1. Connect to MCP Server and fetch tools
+        // ── 1. Shared history — survives domain switches ──────────────────
+        var history = _conversations.GetOrCreate(conversationId);
+
+        // ── 2. Semantic routing ───────────────────────────────────────────
+        string context = BuildRoutingContext(userMessage, history);
+        var selection = await _registry.GetRelevantToolsAsync(context, topK: 4, ct);
+        var definition = EiAgentDefinition.ForDomain(selection.Domain);
+
+        _logger.LogInformation(
+            "[Conv={ConvId}] Domain={Domain} Tools=[{Tools}]",
+            conversationId,
+            selection.Domain,
+            string.Join(", ", selection.ToolNames));
+
+        // ── 3. Scoped MCP session — must outlive the streaming loop ───────
+        //    McpClientTool instances (created inside BuildAsync) hold a reference
+        //    to this client. Disposing early = dead tool handles = silent failures.
         var transport = new HttpClientTransport(new HttpClientTransportOptions
+        { Endpoint = new Uri(_options.McpEndpoint) });
+
+        await using var mcpClient = await McpClient.CreateAsync(
+            transport, cancellationToken: ct);
+
+        // ── 4. Build the agent for this domain ────────────────────────────
+        var agent = await _factory.CreateAsync(
+            definition, mcpClient, selection.ToolNames, ct);
+
+        // ── 5. Thread backed by shared history ───────────────────────────
+        //    The thread reads from + appends to history, so the next agent
+        //    invocation (even a different domain) sees all prior turns.
+        var thread = new ChatHistoryAgentThread(history);
+
+        // ── 6. Stream ─────────────────────────────────────────────────────
+        //    SK's FunctionChoiceBehavior.Auto handles the tool-calling loop.
+        //    mcpClient above must stay alive until this loop completes.
+        await foreach (var item in agent.InvokeStreamingAsync(
+            userMessage, thread, cancellationToken: ct))
         {
-            Endpoint = new Uri(_options.McpEndpoint)
-        });
-        await using var client = await McpClient.CreateAsync(transport, cancellationToken: ct);
-        var allTools = await client.ListToolsAsync(cancellationToken: ct);
-
-        // 2. Define Agent Tool Subsets
-        var builderTools = allTools.Where(t =>
-            t.Name.ToUpper().Contains("Job".ToUpper()) || t.Name.ToUpper().Contains("Pipeline".ToUpper()) || t.Name.ToUpper().Contains("Jsonata".ToUpper()) || t.Name.ToUpper().Contains("Catalog".ToUpper())).ToList();
-
-        var operatorTools = allTools.Where(t =>
-            t.Name.ToUpper().Contains("Execution".ToUpper()) || t.Name.ToUpper().Contains("Trigger".ToUpper()) || t.Name.ToUpper().Contains("Scatter".ToUpper())).ToList();
-
-        // 3. Route to Agent (The Classifier)
-        var targetAgent = await ClassifyIntentAsync(userMessage, ct);
-
-        // 4. Build the specific ChatOptions and Prompt for the chosen Agent
-        // Notice the explicit casting to AITool, and the harsh anti-bash instructions
-        List<AITool> toolsToUse;
-        string systemPrompt;
-
-        switch (targetAgent)
-        {
-            case "Builder":
-                systemPrompt = "You are the EI Console Builder. You help users list, create, and configure jobs, pipelines, and tasks. " +
-                               "CRITICAL: Do NOT output bash scripts, PowerShell, or markdown code blocks to run tools. " +
-                               "You must natively invoke the provided tools to get data. " +
-                               "When asked to list jobs, invoke the ListJobs tool immediately.";
-                toolsToUse = builderTools.Cast<AITool>().ToList();
-                break;
-
-            case "Operator":
-                systemPrompt = "You are the EI Console Operator. You help users trigger jobs, check execution status, and view logs. " +
-                               "CRITICAL: Do NOT output bash scripts or fake commands. You must natively invoke the provided tools.";
-                toolsToUse = operatorTools.Cast<AITool>().ToList();
-                break;
-
-            default:
-                systemPrompt = "You are the EI Console Assistant. Answer general questions about the system.";
-                toolsToUse = new List<AITool>();
-                break;
-        }
-
-        var chatOptions = new ChatOptions
-        {
-            ModelId = _options.Model,
-            MaxOutputTokens = _options.MaxOutputTokens,
-            Tools = toolsToUse,
-        };
-
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.System, systemPrompt),
-            new(ChatRole.User, userMessage)
-        };
-
-        // 5. Execute the tool-calling loop
-        var toolClient = _chat.AsBuilder().UseFunctionInvocation().Build();
-
-        await foreach (var update in toolClient.GetStreamingResponseAsync(messages, chatOptions, ct))
-        {
-            if (!string.IsNullOrEmpty(update.Text))
-            {
-                yield return update.Text;
-            }
+            if (!string.IsNullOrEmpty(item.Message.Content))
+                yield return item.Message.Content;
         }
     }
 
+    // ── Helpers ───────────────────────────────────────────────────────────
+
+    private static string BuildRoutingContext(
+        string current,
+        Microsoft.SemanticKernel.ChatCompletion.ChatHistory history)
+    {
+        if (history.Count == 0) return current;
+
+        var recent = history
+            .Where(m => m.Role == AuthorRole.User)
+            .TakeLast(2)
+            .Select(m => m.Content ?? "");
+
+        return string.Join(" ", recent) + " " + current;
+    }
 
 
     private async Task<string> ClassifyIntentAsync(string userMessage, CancellationToken ct)

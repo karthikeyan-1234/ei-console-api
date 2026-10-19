@@ -122,7 +122,10 @@ public sealed class ChatService : IChatService
 
         // Call the Orchestrator instead of raw IChatClient
         var sb = new StringBuilder();
-        await foreach (var update in _orchestrator.StreamAsync(request.Content, ct))
+        await foreach (var update in _orchestrator.StreamAsync(
+            request.Content,
+            sessionId.ToString(),   // conversationId: keys the shared ChatHistory
+            ct))
         {
             if (!string.IsNullOrEmpty(update))
             {
